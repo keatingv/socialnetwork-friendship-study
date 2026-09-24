@@ -1,0 +1,4156 @@
+---
+title: "Social Nets Data Prep"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Packages
+
+```{r, warning=FALSE}
+# required packages
+library(tidyverse)
+library(skimr)
+library(purrr)
+library(kableExtra)
+library(knitr)
+library(igraph)
+library(corrr)
+library(gridExtra)
+library(lme4)
+library(lmerTest)
+```
+
+# Analyses
+
+## Load Data
+```{r}
+#Cleaned data file
+main<-read_csv("FINAL.main.csv")
+
+#Each row is a participant
+subjects<-read_csv("FINAL.subjects.csv")
+
+#Friendship Nomination Data
+mainReg<-read_csv("FINAL.mainReg.csv")
+
+#Avoidance Nomination Data
+mainRegNeg<-read_csv("FINAL.mainRegNeg.csv")
+
+# Raw Tie Data for Part 2
+negMain <- read_csv('FINAL.enemiesLong.csv')
+
+onlyMH<-subjects%>%
+    filter(relig %in% c('Hindu','Muslim'))%>%
+    droplevels()
+
+```
+
+
+
+## Grade Level Overviews
+
+### Part 1: General Overview of Socio-Cognitive Survey Measures
+
+#### Group Attitudes
+
+```{r, warning=FALSE}
+
+#Creates a long data frame of participant attitudes to various groups
+#TargetF is the factorized version of the variable
+
+attitudesLong <- subjects %>%
+  select(Subject.ID,grade,Gender,relig,ageinyears,Attitudes_BadMarks:Attitudes_Rich) %>%
+  gather(target,rating,Attitudes_BadMarks:Attitudes_Rich) %>%
+  mutate(target = substr(target,11,20),
+         targetF = factor(target,levels = c('Hindus','Muslims','Boys','Girls','GoodMarks','BadMarks','MyCaste','OtherCaste','MyLang','OtherLang','Rich','Poor')))
+
+attitudesLong %>%
+  group_by(targetF) %>%
+  dplyr::summarise(avg=mean(rating,na.rm=T))
+
+# Filter and split data
+attLong_gender <- attitudesLong %>%
+  filter(!is.na(Gender), !is.na(rating), targetF %in% c("Boys", "Girls"))
+attLong_relig <- attitudesLong %>%
+  filter(!is.na(relig), !is.na(rating), target %in% c("Hindus", "Muslims"))
+```
+
+```{r, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(grid)  # for unit()
+
+# Define target categories of interest and ensure factor order
+targets_of_interest <- c('GoodMarks', 'BadMarks', 'MyCaste', 'OtherCaste',
+                         'MyLang', 'OtherLang', 'Poor', 'Rich')
+
+attitudesLong <- attitudesLong %>%
+  filter(target %in% targets_of_interest) %>%
+  mutate(targetF = factor(target, levels = targets_of_interest))
+
+# Define custom colors for jitter dots
+# Define custom colors by thematic pairs
+target_colors <- c(
+  "GoodMarks"   = "steelblue1",  # light blue
+  "BadMarks"  = "steelblue3",  # dark blue
+  "MyCaste"    = "sienna1",  # light purple
+  "OtherCaste" = "sienna3",  # dark purple
+  "MyLang"     = "palegreen1",  # light brown
+  "OtherLang"  = "palegreen3",  # dark brown
+  "Poor"       = "pink1",  # light pink
+  "Rich"       = "pink3"   # dark pink
+)
+
+# Compute means for labeling
+mean_labels <- attitudesLong %>%
+  group_by(targetF) %>%
+  dplyr::summarise(mean_rating = mean(rating, na.rm = TRUE)) %>%
+  mutate(label_y = mean_rating + 0.2)  # optional nudge upward
+
+# Create the plot
+combined_plot<-ggplot(attitudesLong, aes(x = targetF, y = rating, color = targetF)) +
+  geom_jitter(width = 0.05, height = 0.15, size = 3, alpha = 0.6) +  # colored dots
+  geom_violin(color = "black", fill = NA, linewidth = 0.5, width = 0.5) +  # transparent violin
+  geom_boxplot(color = "black", fill = NA, width = 0.4, outlier.shape = NA) +  # boxplot
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "darkred") +  # red mean point
+  geom_label(
+    data = mean_labels,
+    aes(x = targetF, y = mean_rating, label = round(mean_rating, 2)),
+    inherit.aes = FALSE,
+    nudge_x = 0.25,
+    size = 3,
+    fill = "white",
+    color = "black",
+    label.size = 0.25,
+    label.r = unit(0.15, "lines")
+  ) +
+  scale_color_manual(values = target_colors) +
+  scale_y_continuous(breaks = seq(1, 7, 1), limits = c(1, 7.5)) +
+  theme_bw() +
+  xlab("Attitude Target") +
+  ylab("Liking \n (1=Dislike Very Much; 7 = Like Very Much)") +
+  ggtitle("Ratings of Ingroup and Outgroup \n Caste and Language Targets and other Social Categories") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+
+# Show
+print(combined_plot)
+
+ggsave("combined_plot_ingroupoutgroupother.png",combined_plot,width=5.5,height=6,dpi=300)
+
+
+
+```
+##### Reported Linear Regressions
+
+```{r}
+
+summary(lm(Attitudes_Boys~grade*Gender*relig,data=onlyMH))
+
+summary(lm(Attitudes_Girls~grade*Gender*relig,data=onlyMH))
+
+summary(lm(Attitudes_Hindus~grade*Gender*relig,data=onlyMH))
+
+summary(lm(Attitudes_Muslims~grade*Gender*relig,data=onlyMH))
+
+```
+
+```{r}
+onlyMH$own_gender_pref <- ifelse(
+    onlyMH$Gender == "M",
+    onlyMH$Attitudes_Boys - onlyMH$Attitudes_Girls,
+    onlyMH$Attitudes_Girls - onlyMH$Attitudes_Boys)
+t.test(own_gender_pref ~ Gender, data = onlyMH)
+
+onlyMH$own_religion_pref <- ifelse(
+     onlyMH$relig == "Muslim",
+     onlyMH$Attitudes_Muslims - onlyMH$Attitudes_Hindus,
+     onlyMH$Attitudes_Hindus - onlyMH$Attitudes_Muslims
+ )
+t.test(own_religion_pref ~ relig, data = onlyMH)
+
+t.test(own_gender_pref~relig,data=onlyMH)
+t.test(own_religion_pref~Gender,data=onlyMH)
+```
+
+
+##### Age differences{.tabset}
+
+###### Gender{.tabset}
+
+```{r, warning=FALSE}
+## Girls
+cor.test(subjects$Attitudes_Girls,subjects$ageinyears)
+# 0.14, p<0.001
+## Boys
+cor.test(subjects$Attitudes_Boys,subjects$ageinyears)
+# 0.11, p<0.001
+
+```
+
+######  Religion {.tabset}
+
+```{r, warning=FALSE}
+#Muslims
+cor.test(subjects$Attitudes_Muslims,subjects$ageinyears)
+#0.31, p<0.001
+#Hindus
+cor.test(subjects$Attitudes_Hindus,subjects$ageinyears)
+#0.19, p<0.001
+```
+
+###### Marks {.tabset}
+
+```{r, warning=FALSE}
+#Bad Marks
+cor.test(subjects$Attitudes_BadMarks,subjects$ageinyears)
+#0.28, p<0.01
+
+#Good Marks
+cor.test(subjects$Attitudes_GoodMarks,subjects$ageinyears)
+#-0.16,p<0.01
+
+```
+
+###### Caste {.tabset}
+
+```{r, warning=FALSE}
+## My Caste
+cor.test(subjects$Attitudes_MyCaste,subjects$ageinyears)
+# 0.11, p<0.001
+
+## Other Caste
+cor.test(subjects$Attitudes_OtherCaste,subjects$ageinyears)
+# 0.34, p<0.001
+```
+
+###### Language {.tabset}
+
+```{r, warning=FALSE}
+# My Language
+cor.test(subjects$Attitudes_MyLang,subjects$ageinyears)
+#-0.04, p=0.14
+
+# Other Language
+cor.test(subjects$Attitudes_OtherLang,subjects$ageinyears)
+#0.29, p<0.001
+```
+
+###### Money{.tabset}
+
+```{r, warning=FALSE}
+#Poor
+cor.test(subjects$Attitudes_Poor,subjects$ageinyears)
+# 0.12, p<0.01
+#Rich
+cor.test(subjects$Attitudes_Rich,subjects$ageinyears)
+#0.04, p=0.16
+```
+
+##### Gender differences {.tabset}
+
+###### Do they Exist? {.tabset}
+
+```{r, warning=FALSE}
+#ANOVAs to test: Marks, Caste, Lang, Money
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- attitudesLong %>% 
+  filter(!is.na(Gender)) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(rating ~ Gender, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+##ANOVA about Gender 
+nested2<-attLong_gender%>%
+  filter(!is.na(Gender))%>%
+  group_by(target)%>%
+  nest()
+
+nested2<-nested2%>%
+  mutate(model=map(data,~aov(rating~Gender,data=.)))
+
+nested2<-nested2%>%
+  mutate(tidy=map(model,broom::tidy))
+
+nested2%>%
+  unnest(tidy,.drop=T)
+
+##ANOVA about Religion 
+nested3<-attLong_relig%>%
+  filter(!is.na(Gender))%>%
+  group_by(target)%>%
+  nest()
+
+nested3<-nested3%>%
+  mutate(model=map(data,~aov(rating~Gender,data=.)))
+
+nested3<-nested3%>%
+  mutate(tidy=map(model,broom::tidy))
+
+nested3%>%
+  unnest(tidy,.drop=T)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(broom)
+
+# Define a function to process each nested ANOVA result
+process_nested <- function(nested_df, label) {
+  nested_df %>%
+    # Unnest the 'tidy' column, which contains the ANOVA results in a tidy dataframe format
+    unnest(tidy, .drop = TRUE) %>%
+    
+    # Filter out the 'Residuals' row because we're interested only in the model terms
+    filter(term != "Residuals") %>%
+    
+    # Select relevant columns: the grouping variable 'target', the term tested (e.g., Gender), 
+    # the test statistic (F value), and the p-value
+    select(target, term, statistic, p.value) %>%
+    
+    # Rename the 'statistic' column to 'F' for clarity (since it's the F-test statistic)
+    dplyr::rename(F = statistic) %>%
+    
+    # Convert the 'F' and 'p.value' columns into a long format, creating two rows per target-term pair
+    gather(key = tmp, value = value, F, p.value) %>%
+    
+    # Unite the 'term' and 'tmp' columns into a single column (e.g., "Gender_F" or "Gender_p.value")
+    unite(tmp, term, tmp, sep = ".") %>%
+    
+    # Spread the data back into wide format so that F and p.value are columns named by term
+    spread(key = tmp, value = value) %>%
+    
+    # Add a new column 'source' to indicate which nested dataset this summary came from
+    mutate(source = label)
+}
+
+# Apply the processing function to each nested ANOVA dataset,
+# labeling them for identification
+tab1 <- process_nested(nested, "nested1")
+tab2 <- process_nested(nested2, "nested2")
+tab3 <- process_nested(nested3, "nested3")
+
+# Combine all the processed tables into one by stacking rows together
+combined_tab <- bind_rows(tab1, tab2, tab3)
+
+# Print the combined results table to view all ANOVA summaries from the three nested datasets
+print(combined_tab)
+
+library(dplyr)
+library(gt)
+
+combined_tab_color<-combined_tab %>%
+  mutate(
+    Gender.p.value = signif(Gender.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("Gender.F", "Gender.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "Gender.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    Gender.F = "F Statistic",
+    Gender.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+
+print(combined_tab_color)
+
+
+
+```
+
+###### Direction? {.tabset}
+
+####### Good Marks {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$Attitudes_GoodMarks~subjects$Gender) # F > M, p=0.004
+effsize::cohen.d(subjects$Attitudes_GoodMarks~subjects$Gender) #d=0.19
+```
+
+###### My Caste {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$Attitudes_MyCaste~subjects$Gender) # F > M, p=0.0175
+effsize::cohen.d(subjects$Attitudes_MyCaste~subjects$Gender) #d=0.135
+```
+###### My Lang {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$Attitudes_MyLang~subjects$Gender) # F > M, p=0.003
+effsize::cohen.d(subjects$Attitudes_MyLang~subjects$Gender) #d=0.168
+```
+###### Boys {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$Attitudes_Boys~subjects$Gender) # F << M, p<0.00001
+effsize::cohen.d(subjects$Attitudes_Boys~subjects$Gender) #d=-1.69
+```
+###### Girls {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$Attitudes_Girls~subjects$Gender) # F >> M, p<0.001
+effsize::cohen.d(subjects$Attitudes_Girls~subjects$Gender) #d=1.37
+```
+##### Religious differences{.tabset}
+
+###### Do they Exist? {.tabset}
+
+```{r, warning=FALSE}
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- attitudesLong %>% 
+  filter(relig %in% c('Hindu','Muslim')) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(rating ~ relig, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+##ANOVA about Gender 
+nested2<-attLong_gender%>%
+  filter(relig %in% c('Hindu','Muslim')) %>%
+  group_by(target)%>%
+  nest()
+
+nested2<-nested2%>%
+  mutate(model=map(data,~aov(rating~relig,data=.)))
+
+nested2<-nested2%>%
+  mutate(tidy=map(model,broom::tidy))
+
+nested2%>%
+  unnest(tidy,.drop=T)
+
+##ANOVA about Religion 
+nested3<-attLong_relig%>%
+  filter(relig %in% c('Hindu','Muslim')) %>%
+  group_by(target)%>%
+  nest()
+
+nested3<-nested3%>%
+  mutate(model=map(data,~aov(rating~relig,data=.)))
+
+nested3<-nested3%>%
+  mutate(tidy=map(model,broom::tidy))
+
+nested3%>%
+  unnest(tidy,.drop=T)
+
+# Apply the processing function to each nested ANOVA dataset,
+# labeling them for identification
+tab1 <- process_nested(nested, "nested1")
+tab2 <- process_nested(nested2, "nested2")
+tab3 <- process_nested(nested3, "nested3")
+
+# Combine all the processed tables into one by stacking rows together
+combined_tab <- bind_rows(tab1, tab2, tab3)
+
+# Print the combined results table to view all ANOVA summaries from the three nested datasets
+print(combined_tab)
+
+library(dplyr)
+library(gt)
+
+combined_tab_color<-combined_tab %>%
+  mutate(
+    relig.p.value = signif(relig.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("relig.F", "relig.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "relig.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    relig.F = "F Statistic",
+    relig.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+
+print(combined_tab_color)
+
+
+
+```
+
+
+###### Direction? {.tabset}
+
+####### Good Marks {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Attitudes_GoodMarks~onlyMH$relig) # H > M, p=0.002
+effsize::cohen.d(onlyMH$Attitudes_GoodMarks~onlyMH$relig) #d=0.214
+```
+####### MyLang {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Attitudes_MyLang~onlyMH$relig) # H > M, p<0.001
+effsize::cohen.d(onlyMH$Attitudes_MyLang~onlyMH$relig) #d=0.235
+```
+####### OtherLang {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Attitudes_OtherLang~onlyMH$relig) # H > M, p=0.028
+effsize::cohen.d(onlyMH$Attitudes_OtherLang~onlyMH$relig) #d=0.13
+```
+####### Rich {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Attitudes_Rich~onlyMH$relig) # H > M, p=0.005
+effsize::cohen.d(onlyMH$Attitudes_Rich~onlyMH$relig) #d=0.2054
+```
+####### Hindus {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Attitudes_Hindus~onlyMH$relig) # H >> M, p<0.001
+effsize::cohen.d(onlyMH$Attitudes_Hindus~onlyMH$relig) #d=1.80
+```
+####### Muslims {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Attitudes_Muslims~onlyMH$relig) # H << M, p<0.001
+effsize::cohen.d(onlyMH$Attitudes_Muslims~onlyMH$relig) #d=-1.378
+```
+
+#### Social Identity Importance
+```{r, warning=FALSE}
+# convert to long
+identLong <- subjects %>%
+  select(Subject.ID,grade,Gender,relig,ageinyears,Identification_Caste:Identification_School) %>%
+  gather(target,rating,Identification_Caste:Identification_School) %>%
+  mutate(target = substr(target,16,25),
+         ident = 6-rating)
+```
+
+```{r, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(grid)  # for unit()
+
+# Define target categories of interest and ensure factor order
+targets_of_interest <- c('Caste', 'Gender', 'Language', 'Marks',
+                         'Religion', 'School')
+target_colors <- brewer.pal(n = length(targets_of_interest), name = "Set2")
+names(target_colors) <- targets_of_interest  # name them so it's clear
+
+identLong <- identLong %>%
+  filter(target %in% targets_of_interest) %>%
+  mutate(targetF = factor(target, levels = targets_of_interest))
+
+# Compute means for labeling
+mean_labels <- identLong %>%
+  group_by(targetF) %>%
+  dplyr::summarise(mean_ident = mean(ident, na.rm = TRUE)) %>%
+  mutate(label_y = mean_ident + 0.2)  # optional nudge upward
+
+# Create the plot
+combined_plot<-ggplot(identLong, aes(x = targetF, y = ident, color = targetF)) +
+  geom_jitter(width = 0.05, height = 0.15, size = 3, alpha = 0.6) +  # colored dots
+  geom_violin(color = "black", fill = NA, linewidth = 0.5, width = 0.5) +  # transparent violin
+  geom_boxplot(color = "black", fill = NA, width = 0.4, outlier.shape = NA) +  # boxplot
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "darkred") +  # red mean point
+  geom_label(
+    data = mean_labels,
+    aes(x = targetF, y = mean_ident, label = round(mean_ident, 2)),
+    inherit.aes = FALSE,
+    nudge_x = 0.25,
+    size = 3,
+    fill = "white",
+    color = "black",
+    label.size = 0.25,
+    label.r = unit(0.15, "lines")
+  ) +
+  scale_color_manual(values = target_colors) +
+  scale_y_continuous(breaks = seq(1, 5, 1), limits = c(1, 5.5)) +
+  theme_bw() +
+  xlab("Identification Category") +
+  ylab("Identification \n (1=Not at all important; 5 = Very important)") +
+  ggtitle("Identification with Various Social Categories") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+
+# Show
+print(combined_plot)
+
+ggsave("combined_plot_identity.png",combined_plot,width=5.5,height=6,dpi=300)
+
+```
+
+##### Reported Linear Regressions
+
+```{r}
+summary(lm(Identification_Gender~grade*Gender*relig,data=onlyMH))
+
+summary(lm(Identification_Religion~grade*Gender*relig,data=onlyMH))
+
+```
+
+##### Age differences{.tabset}
+
+###### Caste {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Identification_Caste,subjects$ageinyears)
+# 0.12, p=0.687
+```
+
+###### Gender {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Identification_Gender,subjects$ageinyears)
+# -0.135, p<0.001
+#Hence as kids get older, more identification (remember all this is reverse coded)
+```
+
+###### Language {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Identification_Language,subjects$ageinyears)
+# 0.175, p<0.001
+# Less identification with language over age
+```
+
+###### Marks {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Identification_Marks,subjects$ageinyears)
+# 0.12, p<0.001
+#Older, less identification with marks
+```
+
+###### Religion {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Identification_Religion,subjects$ageinyears)
+# -0.067, p=0.02
+# more identification with age
+```
+
+###### School{.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Identification_School,subjects$ageinyears)
+# 0.14, p<0.001
+# Older, less identification with school
+```
+##### Gender differences {.tabset}
+
+```{r, warning=FALSE}
+# by gender - not too much going on
+identPlotGender <- ggplot(filter(identLong,!is.na(Gender)),aes(x=target,y=ident,group=Gender,fill=Gender))
+identPlotGender + stat_summary(fun.y=mean, geom="bar", size=2,position = position_dodge()) +
+  stat_summary(fun.data="mean_cl_boot", geom="linerange",position = position_dodge(.9)) +
+  scale_y_continuous(breaks=seq(1,5,1)) +  coord_cartesian(ylim=c(1,5)) +
+  theme_bw() + xlab("Identification Target") + ylab("Degree of identification")
+
+```
+###### Do they Exist? {.tabset}
+
+```{r, warning=FALSE}
+#ANOVAs to test: 
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- identLong %>% 
+  filter(!is.na(Gender)) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(ident ~ Gender, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(broom)
+
+# Define a function to process each nested ANOVA result
+process_nested <- function(nested_df, label) {
+  nested_df %>%
+    # Unnest the 'tidy' column, which contains the ANOVA results in a tidy dataframe format
+    unnest(tidy) %>%
+    
+    # Filter out the 'Residuals' row because we're interested only in the model terms
+    filter(term != "Residuals") %>%
+    
+    # Select relevant columns: the grouping variable 'target', the term tested (e.g., Gender), 
+    # the test statistic (F value), and the p-value
+    select(target, term, statistic, p.value) %>%
+    
+    # Rename the 'statistic' column to 'F' for clarity (since it's the F-test statistic)
+    dplyr::rename(F = statistic) %>%
+    
+    # Convert the 'F' and 'p.value' columns into a long format, creating two rows per target-term pair
+    gather(key = tmp, value = value, F, p.value) %>%
+    
+    # Unite the 'term' and 'tmp' columns into a single column (e.g., "Gender_F" or "Gender_p.value")
+    unite(tmp, term, tmp, sep = ".") %>%
+    
+    # Spread the data back into wide format so that F and p.value are columns named by term
+    spread(key = tmp, value = value) %>%
+    
+    # Add a new column 'source' to indicate which nested dataset this summary came from
+    mutate(source = label)
+}
+
+
+tab1 <- process_nested(nested,"nested1")
+
+# Print the combined results table to view all ANOVA summaries 
+print(tab1)
+
+library(dplyr)
+library(gt)
+
+tab1_color<-tab1 %>%
+  mutate(
+    Gender.p.value = signif(Gender.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("Gender.F", "Gender.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "Gender.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    Gender.F = "F Statistic",
+    Gender.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+
+print(tab1_color)
+
+```
+###### Direction? {.tabset}
+
+####### Caste {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$Identification_Caste~subjects$Gender) # F < M, p=0.03
+effsize::cohen.d(subjects$Identification_Caste~subjects$Gender) #d=-0.12
+```
+####### Marks {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$Identification_Marks~subjects$Gender) # F < M, p=0.009
+effsize::cohen.d(subjects$Identification_Marks~subjects$Gender) #d=-0.14
+```
+####### Religion {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$Identification_Religion~subjects$Gender) # F < M, p=0.02
+effsize::cohen.d(subjects$Identification_Religion~subjects$Gender) #d=-0.13
+```
+
+##### Religious differences {.tabset}
+
+```{r, warning=FALSE}
+# by religion - suggests bigger diffs here!
+identPlotRelig <- ggplot(filter(identLong,relig %in% c('Hindu','Muslim')),aes(x=target,y=ident,group=relig,fill=relig))
+identPlotRelig + stat_summary(fun.y=mean, geom="bar", size=2,position = position_dodge()) +
+  stat_summary(fun.data="mean_cl_boot", geom="linerange",position = position_dodge(.9)) +
+  scale_y_continuous(breaks=seq(1,5,1)) +  coord_cartesian(ylim=c(1,5)) +
+  theme_bw() + xlab("Identification Target") + ylab("Degree of identification")
+```
+
+###### Do they Exist? {.tabset}
+
+```{r, warning=FALSE}
+#ANOVAs to test: 
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- identLong %>% 
+  filter(relig %in% c('Hindu','Muslim')) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(ident ~ relig, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+tab1 <- process_nested(nested,"nested1")
+
+# Print the combined results table to view all ANOVA summaries 
+print(tab1)
+
+library(dplyr)
+library(gt)
+
+tab1_color<-tab1 %>%
+  mutate(
+    relig.p.value = signif(relig.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("relig.F", "relig.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "relig.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    relig.F = "F Statistic",
+    relig.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+
+print(tab1_color)
+
+```
+###### Direction? {.tabset}
+
+```{r, warning=FALSE}
+#Remember onlyMH is only Muslim and Hindu participants
+```
+
+####### Caste {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Identification_Caste~onlyMH$relig) # H > M, p<0.001
+effsize::cohen.d(onlyMH$Identification_Caste~onlyMH$relig) #d=0.32
+#Caste mattered more for Muslims
+```
+
+####### Gender {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Identification_Gender~onlyMH$relig) # H > M, p=0.0005
+effsize::cohen.d(onlyMH$Identification_Gender~onlyMH$relig) #d=0.198
+# Muslims identified more with gender
+```
+
+####### Marks {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Identification_Marks~onlyMH$relig) # H < M, p=0.045
+effsize::cohen.d(onlyMH$Identification_Marks~onlyMH$relig) #d=-0.118
+#Hindus identified more with marks
+```
+
+####### Religion {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Identification_Religion~onlyMH$relig) # H > M, p<0.001
+effsize::cohen.d(onlyMH$Identification_Religion~onlyMH$relig) #d=0.407
+#Muslims more religion
+```
+
+####### School {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Identification_School~onlyMH$relig) # H < M, p<0.0201
+effsize::cohen.d(onlyMH$Identification_School~onlyMH$relig) #d=-0.27
+#Hindus identify more with school
+```
+
+
+#### Perception of School Norms
+```{r, warning=FALSE}
+# convert to long
+normsLong <- subjects %>%
+  dplyr::select(Subject.ID,grade,Gender,relig,ageinyears,SchoolHarmony_BoyGirl:SchoolHarmony_RichPoor) %>%
+  gather(target,rating,SchoolHarmony_BoyGirl:SchoolHarmony_RichPoor) %>%
+  mutate(target = substr(target,15,25),
+         norm = 6-rating) #Note we're reverse coded again
+```
+
+```{r, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(grid)  # for unit()
+
+# Define target categories of interest and ensure factor order
+targets_of_interest <- c('BoyGirl', 'HinduMuslim', 'InterCaste', 'People',
+                         'RichPoor')
+target_colors <- brewer.pal(n = length(targets_of_interest), name = "Set2")
+names(target_colors) <- targets_of_interest  # name them so it's clear
+
+normsLong <- normsLong %>%
+  filter(target %in% targets_of_interest) %>%
+  mutate(targetF = factor(target, levels = targets_of_interest))
+
+# Compute means for labeling
+mean_labels <- normsLong %>%
+  group_by(target) %>%
+  dplyr::summarise(mean_norm = mean(norm, na.rm = TRUE)) %>%
+  mutate(label_y = mean_norm + 0.2)  # optional nudge upward
+
+# Create the plot
+combined_plot<-ggplot(normsLong, aes(x = target, y = norm, color = target)) +
+  geom_jitter(width = 0.05, height = 0.15, size = 3, alpha = 0.6) +  # colored dots
+  geom_violin(color = "black", fill = NA, linewidth = 0.5, width = 0.5) +  # transparent violin
+  geom_boxplot(color = "black", fill = NA, width = 0.4, outlier.shape = NA) +  # boxplot
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "darkred") +  # red mean point
+  geom_label(
+    data = mean_labels,
+    aes(x = target, y = mean_norm, label = round(mean_norm, 2)),
+    inherit.aes = FALSE,
+    nudge_x = 0.25,
+    size = 3,
+    fill = "white",
+    color = "black",
+    label.size = 0.25,
+    label.r = unit(0.15, "lines")
+  ) +
+  scale_color_manual(values = target_colors) +
+  scale_y_continuous(breaks = seq(1, 5, 1), limits = c(1, 5.5)) +
+  theme_bw() +
+  xlab("Groups of People") +
+  ylab(" 'In my school, _____ get along well' \n (1=Definitely disagree; 5 = Definitely agree)") +
+  ggtitle("School Norms of Groups Getting Along") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+
+# Show
+print(combined_plot)
+
+ggsave("combined_plot_schoolnorms.png",combined_plot,width=5.5,height=6,dpi=300)
+
+```
+
+##### Reported Linear Regressions
+```{r}
+summary(lm(SchoolHarmony_BoyGirl~grade*Gender*relig,data=onlyMH))
+
+summary(lm(SchoolHarmony_HinduMuslim~grade*Gender*relig,data=onlyMH))
+
+summary(lm(SchoolHarmony_People~grade*Gender*relig,data=onlyMH))
+
+```
+
+##### Age differences {.tabset}
+
+###### BoyGirl {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$SchoolHarmony_BoyGirl,subjects$ageinyears)
+# -0.196, p<0.001
+#older, more endorsement
+```
+
+###### HinduMuslim {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$SchoolHarmony_HinduMuslim,subjects$ageinyears)
+#-0.256, p<0.001
+#older, more endorsement
+```
+
+###### InterCaste {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$SchoolHarmony_InterCaste,subjects$ageinyears)
+# -0.24, p<0.001
+#older, more endorsement
+```
+
+###### People {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$SchoolHarmony_People,subjects$ageinyears)
+#0.118, p<0.001
+#older, less endorsement
+```
+
+###### RichPoor {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$SchoolHarmony_RichPoor,subjects$ageinyears)
+#-0.155, p<0.001
+# older, more endorsement
+
+```
+##### Gender differences {.tabset}
+
+```{r, warning=FALSE}
+# by gender - not too much going on
+normsPlotGender <- ggplot(filter(normsLong,!is.na(Gender)),aes(x=target,y=norm,group=Gender,fill=Gender))
+normsPlotGender + stat_summary(fun.y=mean, geom="bar", size=2,position = position_dodge()) +
+  stat_summary(fun.data="mean_cl_boot", geom="linerange",position = position_dodge(.9)) +
+  scale_y_continuous(breaks=seq(1,5,1)) +  coord_cartesian(ylim=c(1,5)) +
+  theme_bw() + xlab("Norm Type") + ylab("Endorsement of Positive Norm")
+```
+
+###### Do they Exist? (No) {.tabset} 
+
+```{r, warning=FALSE}
+#ANOVAs to test: 
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- normsLong %>% 
+  filter(!is.na(Gender)) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(norm ~ Gender, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+tab1 <- process_nested(nested,"nested1")
+
+# Print the combined results table to view all ANOVA summaries 
+print(tab1)
+
+library(dplyr)
+library(gt)
+
+tab1_color<-tab1 %>%
+  mutate(
+    Gender.p.value = signif(Gender.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("Gender.F", "Gender.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "Gender.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    Gender.F = "F Statistic",
+    Gender.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+
+print(tab1_color)
+```
+
+
+##### Religious Differences {.tabset}
+
+```{r, warning=FALSE}
+# by religion - suggests bigger diffs here!
+normsPlotRelig <- ggplot(filter(normsLong,relig %in% c('Hindu','Muslim')),aes(x=target,y=norm,group=relig,fill=relig))
+normsPlotRelig + stat_summary(fun.y=mean, geom="bar", size=2,position = position_dodge()) +
+  stat_summary(fun.data="mean_cl_boot", geom="linerange",position = position_dodge(.9)) +
+  scale_y_continuous(breaks=seq(1,5,1)) +  coord_cartesian(ylim=c(1,5)) +
+  theme_bw() + xlab("Norm Type") + ylab("Endorsement of Positive Norm")
+```
+###### Do they Exist? {.tabset}
+
+```{r, warning=FALSE}
+#ANOVAs to test: 
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- normsLong %>% 
+  filter(relig %in% c('Hindu','Muslim')) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(norm ~ relig, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+tab1 <- process_nested(nested,"nested1")
+
+# Print the combined results table to view all ANOVA summaries 
+print(tab1)
+
+library(dplyr)
+library(gt)
+
+tab1_color<-tab1 %>%
+  mutate(
+    relig.p.value = signif(relig.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("relig.F", "relig.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "relig.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    relig.F = "F Statistic",
+    relig.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+print(tab1_color)
+```
+
+###### Direction? {.tabset}
+
+```{r, warning=FALSE}
+#Remember onlyMH is only Muslim and Hindu participants
+onlyMH<-subjects%>%
+    filter(relig %in% c('Hindu','Muslim'))%>%
+    droplevels()
+```
+
+####### BoyGirl {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$SchoolHarmony_BoyGirl~onlyMH$relig) # H < M, p=0.0038
+effsize::cohen.d(onlyMH$SchoolHarmony_BoyGirl~onlyMH$relig) #d=-0.20
+#Hindus perceived more BoyGirl harmony than Muslims
+```
+
+### Part 2: Social Network Overview
+
+#### Summaries of number of ties {.tabset}
+
+##### Positive Ties {.tabset}
+
+```{r, warning=FALSE}
+# positive ties
+ties <- main %>%
+  select(Subject.ID,grade,Gender,relig,Category,Response) %>%
+  group_by(grade,Gender,relig,Subject.ID) %>%
+  dplyr::summarise(numAlters = length(!is.na(Response)))
+
+mean(ties$numAlters) # 6.27
+sd(ties$numAlters) # 1.6
+min(ties$numAlters)# 1 
+max(ties$numAlters) # 23
+table(ties$numAlters)
+
+38+11+3+3+1+1  # number selecting more than 7 (57)
+
+```
+
+###### Differences by Age, Gender, Religion {.tabset}
+
+####### Age {.tabset}
+
+```{r, warning=FALSE}
+cor.test(ties$grade,ties$numAlters)  # more ties with age (p<0.001)
+```
+
+####### Gender {.tabset}
+
+```{r, warning=FALSE}
+# gender or relig diffs?
+t.test(ties$numAlters ~ ties$Gender) #(p=0.05) (F=6.17, M=6.34) 
+effsize::cohen.d(ties$numAlters ~ ties$Gender) # d = -0.11 (negligible)
+```
+####### Religion {.tabset}
+
+```{r, warning=FALSE}
+t.test(numAlters ~ relig, data=filter(ties,relig %in% c('Hindu','Muslim'))) #(p=0.0477), H > M
+  
+effsize::cohen.d(numAlters ~ relig, data=droplevels(filter(ties,relig %in% c('Hindu','Muslim')))) # d = 0.11
+```
+##### Negative Ties {.tabset}
+
+```{r, warning=FALSE}
+negTies <- negMain %>%
+  select(Subject.ID,grade,Gender,relig,Category,Response) %>%
+  group_by(grade,Gender,relig,Subject.ID) %>%
+  dplyr::summarise(numAlters = length(!is.na(Response)))
+
+
+mean(negTies$numAlters) # 4.62
+sd(negTies$numAlters) # 2.51
+min(negTies$numAlters) # 1
+max(negTies$numAlters) #15
+table(negTies$numAlters)
+10+3+3+1+2+1  # number selecting more than 7 (20)
+```
+######Differences by Age {.tabset}
+
+#######Age (Grade) {.tabset}
+
+```{r, warning=FALSE}
+cor.test(negTies$grade,negTies$numAlters)  #p=0.77
+```
+
+
+#######Gender {.tabset}
+
+```{r, warning=FALSE}
+t.test(negTies$numAlters ~ negTies$Gender) # p=0.18
+
+```
+
+#######Religion {.tabset}
+
+```{r, warning=FALSE}
+t.test(numAlters ~ relig, data=filter(negTies,relig %in% c('Hindu','Muslim'))) #p=0.21
+```
+##### Positive & Negative Ties Correlated? {.tabset}
+
+```{r, warning=FALSE}
+# both ties
+bothTies <- negTies %>% dplyr::rename(numNeg = numAlters) %>%
+  left_join(ties)
+```
+
+```{r, warning=FALSE}
+cor.test(bothTies$numAlters,bothTies$numNeg) # positive correlation
+# p<0.001, r=0.21
+```
+
+#### (Own) Gender and Religion Composition {.tabset}
+
+```{r, warning=FALSE}
+
+propTies <- main %>%
+  group_by(Gender,relig,grade,Subject.ID) %>%
+  dplyr::summarise(numNom = length(Response),
+            pctOG = mean(ownGender,na.rm=T),
+            pctOR = mean(ownRelig,na.rm=T),
+            allOG = ifelse(pctOG==1,1,0),
+            allOR = ifelse(pctOR==1,1,0))
+propTiesNeg <- negMain %>%
+  group_by(Gender,relig,grade,Subject.ID) %>%
+  dplyr::summarise(numNeg = length(Response),
+            pctOGneg = mean(ownGender,na.rm=T),
+            pctORneg = mean(ownRelig,na.rm=T),
+            allOGneg = ifelse(pctOGneg==1,1,0),
+            allORneg = ifelse(pctORneg==1,1,0))
+
+propBoth <- propTies %>% 
+  full_join(propTiesNeg) 
+```
+
+##### Summary Positive Ties {.tabset}
+
+###### Own Gender {.tabset}
+
+```{r, warning=FALSE}
+mean(propBoth$pctOG,na.rm=T) # 0.95
+sd(propBoth$pctOG,na.rm=T) # 0.13
+mean(propBoth$allOG,na.rm=T) # 0.84
+```
+###### Own Religion {.tabset}
+
+```{r, warning=FALSE}
+mean(propBoth$pctOR,na.rm=T) #0.71
+sd(propBoth$pctOR,na.rm=T) # 0.28
+mean(propBoth$allOR,na.rm=T) # 0.29
+```
+##### Summary Negative Ties {.tabset}
+
+###### Own Gender {.tabset}
+
+```{r, warning=FALSE}
+mean(propBoth$pctOGneg,na.rm=T) # 0.77
+sd(propBoth$pctOGneg,na.rm=T) # 0.34
+mean(propBoth$pctOGneg,na.rm=T) #0.77
+```
+###### Own Religion {.tabset}
+
+```{r, warning=FALSE}
+mean(propBoth$pctORneg,na.rm=T) #0.42
+sd(propBoth$pctORneg,na.rm=T) #0.35
+mean(propBoth$pctORneg,na.rm=T) #0.42
+```
+##### Differences {.tabset}
+
+###### Age (Grade Differences) {.tabset}
+
+```{r, warning=FALSE}
+# grade comparisons
+cor.test(propBoth$pctOG,propBoth$grade) #p<0.001
+# more age, less own gender prop networks, r = -0.12
+
+cor.test(propBoth$pctOGneg,propBoth$grade)  # p=0.39
+
+cor.test(propBoth$pctOR,propBoth$grade) #p=0.002
+# more age, less own religion prop networks, r = -0.08
+
+cor.test(propBoth$pctORneg,propBoth$grade)  # p = 0.5
+```
+
+###### Gender Differences {.tabset}
+
+```{r, warning=FALSE}
+t.test(propBoth$pctOG ~ propBoth$Gender) #(p<0.001)
+# More M than F positive OG
+t.test(propBoth$pctOGneg ~ propBoth$Gender)#(p<0.001)
+# More M than F negative OG
+t.test(propBoth$pctOR ~ propBoth$Gender)#(p<0.001)
+# More M than F positive OR
+t.test(propBoth$pctORneg ~ propBoth$Gender)#(p=0.002)
+# More F than M negative OR
+```
+###### Religion Differences {.tabset}
+
+```{r, warning=FALSE}
+# restrict to Hindu and Muslim for religion comparisons
+propBothHR <- filter(propBoth,relig %in% c('Muslim','Hindu'))
+
+t.test(propBothHR$pctOG ~ propBothHR$relig) # ns, p=0.14
+t.test(propBothHR$pctOGneg ~ propBothHR$relig)  # ns, p = 0.05
+#Hindus more than Muslims own gender (marginal)
+
+t.test(propBothHR$pctOR ~ propBothHR$relig) # sig, p<0.001
+# Hindus had more own religion friends than Muslims
+
+t.test(propBothHR$pctORneg ~ propBothHR$relig)  # sig, p<0.001
+#Hindus had more negative own religion than Muslims
+```
+
+#### Basic Visualizations {.tabset}
+
+```{r, warning=FALSE}
+#loading in graph objects and related setup (need to do one at a time)
+load('allgraphsFinal.RData')
+allgraphs<-lapply(allgraphs,igraph::upgrade_graph)
+```
+
+```{r, warning=FALSE}
+#loading in graph objects and related setup (need to do one at a time)
+load('allgraphsNegFinal.RData')
+allgraphsNeg<-lapply(allgraphsNeg,igraph::upgrade_graph)
+```
+##### Positive Graphs {.tabset}
+
+###### One Grade 3 Classroom {.tabset}
+
+```{r, warning=FALSE}
+library(dplyr)
+library(igraph)
+library(ggraph)
+#Selects the classroom
+graph1 <- allgraphs[[1]]
+
+
+graph1 <- graph1 %>%
+# adds or updates a vertex attribute called "Religion" based on "hindu" attribute
+  ## For each vertex -- if Hindu is NA -- Other/Unknown, 1 -- Hindu, Otherwise -- Muslim
+  igraph::set_vertex_attr(
+    "Religion",
+    index = V(graph1), # all vertices of graph1
+    ifelse(
+        is.na(vertex_attr(graph1)$hindu),'Other / Unknown',
+        ifelse(vertex_attr(graph1)$hindu==1,'Hindu','Muslim')))
+
+# Create a graph using the Kamada-Kawai (kk) layout
+ggraph::ggraph(graph1, layout = 'kk') + 
+  #Draw edges with arrows
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour='grey') + 
+  geom_edge_loop(colour='grey') +
+  #Color nodes is thegender (as based on male)
+  #Shape made by religion
+  geom_node_point(aes(color = as.factor(male),shape=Religion), size=6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title='A 3rd Grade Classroom') +
+  scale_color_manual(
+    values = c("0" = "goldenrod1", "1" = "mediumpurple1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  )+
+  #scale_color_discrete(breaks=c(0,1),labels=c("Female","Male"), name='Gender')+
+  theme(text=element_text(family="Calibri"))
+
+ggraph::ggraph(graph1, layout = 'kk') + 
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+  geom_node_point(aes(color = Religion, shape = as.factor(male)), size = 6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title = 'A 3rd Grade Classroom') +
+  scale_color_manual(
+    values = c(
+      "Hindu" = "tomato",
+      "Muslim" = "deepskyblue",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+  scale_shape_manual(
+    values = c("0" = 16, "1" = 17),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+  theme(text = element_text(family = "Calibri"))
+
+#Reciprocity of the graph (proportion of mutual edges, I nominate you, you nominate me)
+reciprocity(graph1) # 0.46
+```
+
+
+###### One Grade 6 Classroom {.tabset}
+
+```{r, warning=FALSE}
+library(dplyr)
+library(igraph)
+library(ggraph)
+#Selects the classroom
+graph2 <- allgraphs[[11]]
+
+
+graph2 <- graph2 %>%
+# adds or updates a vertex attribute called "Religion" based on "hindu" attribute
+  ## For each vertex -- if Hindu is NA -- Other/Unknown, 1 -- Hindu, Otherwise -- Muslim
+  igraph::set_vertex_attr(
+    "Religion",
+    index = V(graph2), # all vertices of graph2
+    ifelse(
+        is.na(vertex_attr(graph2)$hindu),'Other / Unknown',
+        ifelse(vertex_attr(graph2)$hindu==1,'Hindu','Muslim')))
+
+# Create a graph using the Kamada-Kawai (kk) layout
+ggraph::ggraph(graph2, layout = 'kk') + 
+  #Draw edges with arrows
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour='grey') + 
+  geom_edge_loop(colour='grey') +
+  #Color nodes is thegender (as based on male)
+  #Shape made by religion
+  geom_node_point(aes(color = as.factor(male),shape=Religion), size=6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title='A 6th Grade Classroom') +
+  scale_color_manual(
+    values = c("0" = "goldenrod1", "1" = "mediumpurple1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  )+
+  #scale_color_discrete(breaks=c(0,1),labels=c("Female","Male"), name='Gender')+
+  theme(text=element_text(family="Calibri"))
+
+ggraph::ggraph(graph2, layout = 'kk') + 
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+  geom_node_point(aes(color = Religion, shape = as.factor(male)), size = 6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title = 'A 6th Grade Classroom') +
+  scale_color_manual(
+    values = c(
+      "Hindu" = "tomato",
+      "Muslim" = "deepskyblue",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+  scale_shape_manual(
+    values = c("0" = 16, "1" = 17),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+  theme(text = element_text(family = "Calibri"))
+
+#Reciprocity of the graph (proportion of mutual edges, I nominate you, you nominate me)
+reciprocity(graph2) # 0.44
+```
+
+
+```{r}
+ggraph::ggraph(graph2, layout = 'kk') + 
+  # Draw edges
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+
+  # Nodes: fill = gender, border color = religion
+  geom_node_point(
+    aes(
+      fill = as.factor(male),   # Fill color by gender
+      color = Religion          # Border color by religion
+    ),
+    shape = 21,                 # Circle with border and fill
+    stroke = 2,               # Border thickness
+    size = 3
+  ) +
+
+  theme_graph(foreground = 'black', fg_text_colour = 'white') +
+  labs(title = 'A 6th Grade Classroom') +
+
+  # Gender fill colors
+  scale_fill_manual(
+    values = c("0" = "lightcoral", "1" = "lightblue1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+
+  # Religion border colors
+  scale_color_manual(
+    values = c(
+      "Muslim" = "springgreen4",
+      "Hindu" = "tan1",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+
+  theme(text = element_text(family = "Calibri"))
+
+
+ggraph::ggraph(graph2, layout = 'kk') + 
+  # Draw edges
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+
+  # Nodes: fill = gender, shape = gender, border color = religion
+  geom_node_point(
+    aes(
+      fill = as.factor(male),    # Fill color by gender
+      shape = as.factor(male),   # Shape by gender
+      color = Religion           # Border color by religion
+    ),
+    stroke = 2,               # Border thickness
+    size = 4
+  ) +
+
+  theme_graph(foreground = 'black', fg_text_colour = 'white') +
+  labs(title = 'A 6th Grade Classroom') +
+
+  # Gender fill colors
+  scale_fill_manual(
+    values = c("0" = "lightcoral", "1" = "lightblue1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+
+  # Gender shapes: Female = triangle (24), Male = square (22)
+  scale_shape_manual(
+    values = c("0" = 24, "1" = 22), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+
+  # Religion border colors
+  scale_color_manual(
+    values = c(
+      "Muslim" = "springgreen4",
+      "Hindu" = "tan1",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+
+  theme(text = element_text(family = "Calibri"))
+
+
+```
+
+
+###### One Grade 9 Classroom {.tabset}
+
+```{r, warning=FALSE}
+library(dplyr)
+library(igraph)
+library(ggraph)
+#Selects the classroom
+graph3 <- allgraphs[[19]]
+
+
+graph3 <- graph3 %>%
+# adds or updates a vertex attribute called "Religion" based on "hindu" attribute
+  ## For each vertex -- if Hindu is NA -- Other/Unknown, 1 -- Hindu, Otherwise -- Muslim
+  igraph::set_vertex_attr(
+    "Religion",
+    index = V(graph3), # all vertices of graph3
+    ifelse(
+        is.na(vertex_attr(graph3)$hindu),'Other / Unknown',
+        ifelse(vertex_attr(graph3)$hindu==1,'Hindu','Muslim')))
+
+# Create a graph using the Kamada-Kawai (kk) layout
+ggraph::ggraph(graph3, layout = 'kk') + 
+  #Draw edges with arrows
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour='grey') + 
+  geom_edge_loop(colour='grey') +
+  #Color nodes is thegender (as based on male)
+  #Shape made by religion
+  geom_node_point(aes(color = as.factor(male),shape=Religion), size=6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title='A 9th Grade Classroom') +
+  scale_color_manual(
+    values = c("0" = "goldenrod1", "1" = "mediumpurple1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  )+
+  theme(text=element_text(family="Calibri"))
+
+ggraph::ggraph(graph3, layout = 'kk') + 
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+  geom_node_point(aes(color = Religion, shape = as.factor(male)), size = 6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title = 'A 9th Grade Classroom') +
+  scale_color_manual(
+    values = c(
+      "Hindu" = "tomato",
+      "Muslim" = "deepskyblue",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+  scale_shape_manual(
+    values = c("0" = 16, "1" = 17),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+  theme(text = element_text(family = "Calibri"))
+
+#Reciprocity of the graph (proportion of mutual edges, I nominate you, you nominate me)
+reciprocity(graph3) # 0.46
+```
+
+##### Negative Graphs {.tabset}
+
+###### One Grade 5 Classroom {.tabset}
+
+```{r, warning=FALSE}
+library(dplyr)
+library(igraph)
+library(ggraph)
+#Selects the classroom
+graph1neg <- allgraphsNeg[[1]]
+
+
+graph1neg <- graph1neg %>%
+# adds or updates a vertex attribute called "Religion" based on "hindu" attribute
+  ## For each vertex -- if Hindu is NA -- Other/Unknown, 1 -- Hindu, Otherwise -- Muslim
+  igraph::set_vertex_attr(
+    "Religion",
+    index = V(graph1neg), # all vertices of graph1neg
+    ifelse(
+        is.na(vertex_attr(graph1neg)$hindu),'Other / Unknown',
+        ifelse(vertex_attr(graph1neg)$hindu==1,'Hindu','Muslim')))
+
+# Create a graph using the Kamada-Kawai (kk) layout
+ggraph::ggraph(graph1neg, layout = 'kk') + 
+  #Draw edges with arrows
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour='grey') + 
+  geom_edge_loop(colour='grey') +
+  #Color nodes is thegender (as based on male)
+  #Shape made by religion
+  geom_node_point(aes(color = as.factor(male),shape=Religion), size=6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title='A 5th Grade Classroom: Negative Ties') +
+  scale_color_manual(
+    values = c("0" = "goldenrod1", "1" = "mediumpurple1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  )+
+  #scale_color_discrete(breaks=c(0,1),labels=c("Female","Male"), name='Gender')+
+  theme(text=element_text(family="Calibri"))
+
+ggraph::ggraph(graph1neg, layout = 'kk') + 
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+  geom_node_point(aes(color = Religion, shape = as.factor(male)), size = 6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title = 'A 5th Grade Classroom: Negative Ties') +
+  scale_color_manual(
+    values = c(
+      "Hindu" = "tomato",
+      "Muslim" = "deepskyblue",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+  scale_shape_manual(
+    values = c("0" = 16, "1" = 17),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+  theme(text = element_text(family = "Calibri"))
+
+#Reciprocity of the graph (proportion of mutual edges, I nominate you, you nominate me)
+reciprocity(graph1neg) # 0.1
+
+```
+
+```{r}
+
+ggraph::ggraph(graph1neg, layout = 'kk') + 
+  # Draw edges
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+
+  # Nodes: fill = gender, shape = gender, border color = religion
+  geom_node_point(
+    aes(
+      fill = as.factor(male),    # Fill color by gender
+      shape = as.factor(male),   # Shape by gender
+      color = Religion           # Border color by religion
+    ),
+    stroke = 2,               # Border thickness
+    size = 4
+  ) +
+
+  theme_graph(foreground = 'black', fg_text_colour = 'white') +
+  labs(title = 'A 7th Grade Classroom Negative Ties') +
+
+  # Gender fill colors
+  scale_fill_manual(
+    values = c("0" = "lightcoral", "1" = "lightblue1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+
+  # Gender shapes: Female = triangle (24), Male = square (22)
+  scale_shape_manual(
+    values = c("0" = 24, "1" = 22), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+
+  # Religion border colors
+  scale_color_manual(
+    values = c(
+      "Muslim" = "springgreen4",
+      "Hindu" = "tan1",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+
+  theme(text = element_text(family = "Calibri"))
+
+```
+
+
+###### One Grade 7 Classroom {.tabset}
+
+```{r, warning=FALSE}
+library(dplyr)
+library(igraph)
+library(ggraph)
+#Selects the classroom
+graph2neg <- allgraphsNeg[[7]]
+
+
+graph2neg <- graph2neg %>%
+# adds or updates a vertex attribute called "Religion" based on "hindu" attribute
+  ## For each vertex -- if Hindu is NA -- Other/Unknown, 1 -- Hindu, Otherwise -- Muslim
+  igraph::set_vertex_attr(
+    "Religion",
+    index = V(graph2neg), # all vertices of graph2neg
+    ifelse(
+        is.na(vertex_attr(graph2neg)$hindu),'Other / Unknown',
+        ifelse(vertex_attr(graph2neg)$hindu==1,'Hindu','Muslim')))
+
+# Create a graph using the Kamada-Kawai (kk) layout
+ggraph::ggraph(graph2neg, layout = 'kk') + 
+  #Draw edges with arrows
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour='grey') + 
+  geom_edge_loop(colour='grey') +
+  #Color nodes is thegender (as based on male)
+  #Shape made by religion
+  geom_node_point(aes(color = as.factor(male),shape=Religion), size=6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title='A 7th Grade Classroom: Negative Ties') +
+  scale_color_manual(
+    values = c("0" = "goldenrod1", "1" = "mediumpurple1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  )+
+  #scale_color_discrete(breaks=c(0,1),labels=c("Female","Male"), name='Gender')+
+  theme(text=element_text(family="Calibri"))
+
+
+ggraph::ggraph(graph2neg, layout = 'kk') + 
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+  geom_node_point(aes(color = Religion, shape = as.factor(male)), size = 6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title = 'A 7th Grade Classroom: Negative Ties') +
+  scale_color_manual(
+    values = c(
+      "Hindu" = "tomato",
+      "Muslim" = "deepskyblue",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+  scale_shape_manual(
+    values = c("0" = 16, "1" = 17),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+  theme(text = element_text(family = "Calibri"))
+
+#Reciprocity of the graph (proportion of mutual edges, I nominate you, you nominate me)
+reciprocity(graph2neg) # 0.1
+```
+
+###### One Grade 9 Classroom {.tabset}
+
+```{r, warning=FALSE}
+library(dplyr)
+library(igraph)
+library(ggraph)
+#Selects the classroom
+graph3neg <- allgraphsNeg[[13]]
+
+
+graph3neg <- graph3neg %>%
+# adds or updates a vertex attribute called "Religion" based on "hindu" attribute
+  ## For each vertex -- if Hindu is NA -- Other/Unknown, 1 -- Hindu, Otherwise -- Muslim
+  igraph::set_vertex_attr(
+    "Religion",
+    index = V(graph3neg), # all vertices of graph3neg
+    ifelse(
+        is.na(vertex_attr(graph3neg)$hindu),'Other / Unknown',
+        ifelse(vertex_attr(graph3neg)$hindu==1,'Hindu','Muslim')))
+
+# Create a graph using the Kamada-Kawai (kk) layout
+ggraph::ggraph(graph3neg, layout = 'kk') + 
+  #Draw edges with arrows
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour='grey') + 
+  geom_edge_loop(colour='grey') +
+  #Color nodes is thegender (as based on male)
+  #Shape made by religion
+  geom_node_point(aes(color = as.factor(male),shape=Religion), size=6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title='A 9th Grade Classroom: Negative Ties') +
+  scale_color_manual(
+    values = c("0" = "goldenrod1", "1" = "mediumpurple1"), 
+    breaks = c("0", "1"),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  )+
+  #scale_color_discrete(breaks=c(0,1),labels=c("Female","Male"), name='Gender')+
+  theme(text=element_text(family="Calibri"))
+
+ggraph::ggraph(graph3neg, layout = 'kk') + 
+  geom_edge_link(arrow = arrow(length = unit(2, 'mm')), 
+                 end_cap = circle(2, 'mm'), colour = 'grey') + 
+  geom_edge_loop(colour = 'grey') +
+  geom_node_point(aes(color = Religion, shape = as.factor(male)), size = 6) +
+  theme_graph(foreground = 'steelblue', fg_text_colour = 'white') +
+  labs(title = 'A 9th Grade Classroom: Negative Ties') +
+  scale_color_manual(
+    values = c(
+      "Hindu" = "tomato",
+      "Muslim" = "deepskyblue",
+      "Other / Unknown" = "gray70"
+    ),
+    name = "Religion"
+  ) +
+  scale_shape_manual(
+    values = c("0" = 16, "1" = 17),
+    labels = c("Female", "Male"),
+    name = "Gender"
+  ) +
+  theme(text = element_text(family = "Calibri"))
+
+
+#Reciprocity of the graph (proportion of mutual edges, I nominate you, you nominate me)
+reciprocity(graph3neg) # 0.1
+```
+
+#### Network-Level stats for each class {.tabset}
+
+It's worth explaining/reminding what each stat represents
+
+* average degree (avgdeg) = how connected, on average, each person is
+* in-degrees (indeg)  = # of edges nominating a single node, i.e., popularity
+* out-degrees (outdeg) = # of edges coming out of a single node, i.e.,outgoing, friendly
+* density (dense) = graph density (how tightly-knit the network is)
+* transitivity (trans) = likelihood that one's friends are friends with each other, lots of this means a lot of triadic closure
+* betweenness (btween) = how much, for a single person, they are on the shortest path between other nodes, nodes play "bridging roles", e.g., connecting two disparate groups
+* path length (pathlng) = path length,(avg number of steps it would take to get from one person to another, smaller means compact network)
+* reciprocity (recip) = do you nominate me if I nominate you
+* number of vertices (numV) = number of vertices in graph (num of nodes)
+
+##### Positive Ties {.tabset}
+
+###### Basic Tables {.tabset}
+
+```{r, warning=FALSE}
+# simple loop to step through graph list and provide graph-level stats
+
+## Empty vectors to hold stats
+avgdeg <- rep(NA,length(allgraphs)) # vector for mean degree (how connected on average, each person is)
+degsd <- rep(NA,length(allgraphs))  # vector of SD of degree
+indegsd <- rep(NA,length(allgraphs))  # SD of in-degree (# of edges nominating a single node, i.e., popularity)
+outdegsd <- rep(NA,length(allgraphs))  # SD of out-degree (# of edges coming out of a single node, i.e.,outgoing, friendly)
+dense <- rep(NA,length(allgraphs))  # vector for graph density (how tightly-knit the network is)
+trans <- rep(NA,length(allgraphs))  # vector for graph transitivity (likelihood that one's friends are friends with each other, lots of this means a lot of triadic closure)
+btween <- rep(NA,length(allgraphs))  # vector for graph betweeness, (how much, for a single person, they are on the shortest path between other nodes, nodes play "bridging roles", e.g., connecting two disparate groups)
+pathlng <- rep(NA,length(allgraphs))  # path length,(avg number of steps it would take to get from one person to another, smaller means compact network)
+recip <- rep(NA,length(allgraphs))  # reciprocity (do you nominate me if I nominate you)
+numV <- rep(NA,length(allgraphs))   # number of vertices in graph (num of nodes)
+# iqvHindu <- rep(NA,length(allgraphs))  # iqv for religious assortment, treating other as NA
+# iqvMale <- rep(NA,length(allgraphs))  # iqv for gender assortment
+
+# need to run iqv function if adding those stats
+#Loop for functions
+for (i in 1:length(allgraphs)){
+  avgdeg[i] <- mean(degree(allgraphs[[i]]))
+  degsd[i] <- sd(degree(allgraphs[[i]]))
+  indegsd[i] <- sd(degree(allgraphs[[i]],mode='in'))
+  outdegsd[i] <- sd(degree(allgraphs[[i]],mode='out'))
+  dense[i] <- edge_density(allgraphs[[i]])
+  trans[i] <- transitivity(allgraphs[[i]])
+  btween[i] <- mean(betweenness(allgraphs[[i]]))
+  pathlng[i] <- mean_distance(allgraphs[[i]])
+  recip[i] <- reciprocity(allgraphs[[i]])
+  numV[i] <- length(unique(V(allgraphs[[i]])))  # need to confirm this is calculating full graph size as I want it to
+  # iqvMale[i] <- mean(get_iqvs(allgraphs[[i]],'male'),na.rm=T)
+  # iqvHindu[i] <- mean(get_iqvs(allgraphs[[i]],'hindu'),na.rm=T)
+}
+
+#vector of class names/identifiers
+names <- c('A3','B3','C3','A4','B4','C4','A5','B5','C5','A6','B6','C6','A7','B7','C7','A8','B8','C8','A9','B9','C9','A10')
+#everything into one
+graphstats <- data.frame(ID=names,avgdeg=avgdeg,degsd=degsd,indegsd=indegsd,outdegsd=outdegsd,dense=dense,trans=trans,btween=btween,pathlng=pathlng,recip=recip,numV=numV)
+#Grade column
+graphstats$grade=as.numeric(substr(graphstats$ID,2,3))  # pull grade number (02--09)
+
+```
+
+```{r, warning=FALSE}
+# produce grade-level graphstats via a simple average of the three grades that contribute to it
+gradegraphstats <- graphstats %>%
+  group_by(grade) %>%
+  dplyr::summarise(avgdeg=mean(avgdeg),
+            degsd=mean(degsd),
+            indegsd=mean(indegsd),
+            outdegsd=mean(outdegsd),
+            dense=mean(dense),
+            trans=mean(trans),
+            btween=mean(btween),
+            pathlng=mean(pathlng),
+            recip=mean(recip))
+
+library(gt)
+gt_table <- gt::gt(gradegraphstats) %>%
+  gt::tab_header(
+    title = "Class Social Network Summary Table",
+    subtitle = "Descriptive social network statistics by class"
+  ) %>%
+  gt::fmt_number(
+    columns = everything(),
+    decimals = 2
+  ) %>%
+  gt::tab_options(
+    table.font.names = "Times New Roman",
+    table.font.size = 12
+  )
+
+print(gt_table)
+gt::gtsave(gt_table,filename="GradeSocialNetsSummaryTable.html")
+
+# write table for outputting
+# write.table(round(gradegraphstats,3), file = "cleaned data/netGradeStats.txt", sep = ",", quote = FALSE, row.names = F)
+```
+
+###### Grade Analyses {.tabset}
+
+```{r, warning=FALSE}
+#Old chunk
+library(corrr) #Note there are three rs here
+## Using the data with the classes (not just grades)
+## runs all pairwise comparisons
+corrInfoClass <- correlate(graphstats[2:12])
+# pulls out grade correlations
+focus(corrInfoClass,grade)
+```
+
+```{r, warning=FALSE}
+# Initialize vectors to store results
+vars <- names(graphstats)[!(names(graphstats) %in% c("ID", "grade"))]  # exclude ID and grade
+results <- data.frame(
+  variable = character(),
+  r = numeric(),
+  p = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through each variable and run cor.test with grade
+for (v in vars) {
+  test <- cor.test(graphstats$grade, graphstats[[v]], method = "pearson")
+  results <- rbind(results, data.frame(
+    variable = v,
+    r = test$estimate,
+    p = test$p.value
+  ))
+}
+
+# View results
+print(results)
+
+## What we see is what's sig is a negative correlation between grade and betweenness. That is, the older the grade, the less there are these distinct separate group with high leverage brokers
+```
+
+```{r, warning=FALSE}
+# visualize the larger correlations,
+P1 <- ggplot(gradegraphstats,aes(x=grade,y=btween)) + 
+  geom_point(size=4) + 
+  geom_smooth(method='lm') + theme_bw() +
+  scale_x_continuous(breaks=seq(3,10,1)) +
+  ylab("Betweenness Centrality")+
+  ggtitle("Betweenness Centrality (p=0.02)")
+P2 <- ggplot(gradegraphstats,aes(x=grade,y=recip)) + 
+  geom_point(size=4) + 
+  geom_smooth(method='lm') + theme_bw() +
+  scale_x_continuous(breaks=seq(3,10,1)) +
+  ylab("Reciprocity")+
+  ggtitle("Reciprocity (p=0.20)")
+
+P3 <- ggplot(gradegraphstats,aes(x=grade,y=trans)) + 
+  geom_point(size=4) + 
+  geom_smooth(method='lm') + theme_bw() +
+  scale_x_continuous(breaks=seq(3,10,1)) +
+  ylab("Transitivity")+
+  ggtitle("Transivity (p=0.29)")
+
+
+P4 <- ggplot(gradegraphstats,aes(x=grade,y=dense)) + 
+  geom_point(size=4) + 
+  geom_smooth(method='lm') + theme_bw() +
+  scale_x_continuous(breaks=seq(3,10,1)) +
+  ylab("Density")+
+  ggtitle("Density (p=0.27)")
+
+library(gridExtra)
+grid.arrange(P1, P2, P3, P4, ncol=2,nrow = 2)
+```
+
+
+##### Negative Ties {.tabset}
+
+###### Basic Tables {.tabset}
+
+```{r, warning=FALSE}
+# simple loop to step through graph list and provide graph-level stats
+avgdeg <- rep(NA,length(allgraphsNeg)) # vector for mean degree
+degsd <- rep(NA,length(allgraphsNeg))  # vector of SD of degree
+indegsd <- rep(NA,length(allgraphsNeg))  # SD of in-degree
+outdegsd <- rep(NA,length(allgraphsNeg))  # SD of out-degree
+dense <- rep(NA,length(allgraphsNeg))  # vector for graph density
+trans <- rep(NA,length(allgraphsNeg))  # vector for graph transitivty
+btween <- rep(NA,length(allgraphsNeg))  # vector for graph betweenenss,
+pathlng <- rep(NA,length(allgraphsNeg))  # path length, 
+recip <- rep(NA,length(allgraphsNeg))  # reciprocity
+numV <- rep(NA,length(allgraphsNeg))   # number of vertices in graph
+
+# need to run iqv function if adding those stats
+for (i in 1:length(allgraphsNeg)){
+  avgdeg[i] <- mean(degree(allgraphsNeg[[i]]))
+  degsd[i] <- sd(degree(allgraphsNeg[[i]]))
+  indegsd[i] <- sd(degree(allgraphsNeg[[i]],mode='in'))
+  outdegsd[i] <- sd(degree(allgraphsNeg[[i]],mode='out'))
+  dense[i] <- edge_density(allgraphsNeg[[i]])
+  trans[i] <- transitivity(allgraphsNeg[[i]])
+  btween[i] <- mean(betweenness(allgraphsNeg[[i]]))
+  pathlng[i] <- mean_distance(allgraphsNeg[[i]])
+  recip[i] <- reciprocity(allgraphsNeg[[i]])
+  numV[i] <- length(unique(V(allgraphsNeg[[i]])))  # need to confirm this is calculating full graph size as I want it to
+}
+
+names <- c('A5','B5','C5','A6','B6','C6','A7','B7','C7','A8','B8','C8','A9','B9','C9','A10')
+graphstatsNeg <- data.frame(ID=names,avgdeg=avgdeg,degsd=degsd,indegsd=indegsd,outdegsd=outdegsd,dense=dense,trans=trans,btween=btween,pathlng=pathlng,recip=recip,numV=numV)
+graphstatsNeg$grade=as.numeric(substr(graphstatsNeg$ID,2,3))  # pull grade number (02--09)
+
+```
+
+```{r, warning=FALSE}
+# produce grade-level graphstats via a simple average of the three grades that contribute to it
+gradegraphstatsNeg <- graphstatsNeg %>%
+  group_by(grade) %>%
+  dplyr::summarise(avgdeg=mean(avgdeg),
+            degsd=mean(degsd),
+            indegsd=mean(indegsd),
+            outdegsd=mean(outdegsd),
+            dense=mean(dense),
+            trans=mean(trans),
+            btween=mean(btween),
+            pathlng=mean(pathlng),
+            recip=mean(recip))
+
+library(gt)
+gt_table <- gt::gt(gradegraphstatsNeg) %>%
+  gt::tab_header(
+    title = "Class Social Network Negative Ties Summary Table",
+    subtitle = "Descriptive social network statistics by class"
+  ) %>%
+  gt::fmt_number(
+    columns = everything(),
+    decimals = 2
+  ) %>%
+  gt::tab_options(
+    table.font.names = "Times New Roman",
+    table.font.size = 12
+  )
+
+print(gt_table)
+gt::gtsave(gt_table,filename="GradeNegSocialNetsSummaryTable.html")
+
+# write table for outputting
+#write.table(round(gradegraphstatsNeg,3), file = "cleaned data/netGradeStatsNeg.txt", sep = ",", quote = FALSE, row.names = F)
+
+```
+
+###### Grade Analyses {.tabset}
+
+```{r, warning=FALSE}
+##Old chunk
+# look at grade trends: negative ties
+#corrInfo <- correlate(gradegraphstatsNeg)
+#focus(corrInfo,grade)
+# (not completely sure why run the grade level stats when we have class level)
+
+corrInfoClass <- correlate(graphstatsNeg[2:12])
+focus(corrInfoClass,grade)
+```
+
+```{r, warning=FALSE}
+# Initialize vectors to store results
+vars <- names(graphstatsNeg)[!(names(graphstatsNeg) %in% c("ID", "grade"))]  # exclude ID and grade
+results <- data.frame(
+  variable = character(),
+  r = numeric(),
+  p = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through each variable and run cor.test with grade
+for (v in vars) {
+  test <- cor.test(graphstatsNeg$grade, graphstatsNeg[[v]], method = "pearson")
+  results <- rbind(results, data.frame(
+    variable = v,
+    r = test$estimate,
+    p = test$p.value
+  ))
+}
+
+# View results
+print(results)
+
+## Nothing is significant here, the closest is reciprocity
+```
+
+#### Histograms for Point Demonstration {.tabset}
+
+```{r}
+p1<-ggplot(propBoth, aes(x = pctOG)) +
+  geom_histogram(color = "black", fill = "gray80", bins = 15) +
+  xlab("Proportion of Own-Gender Positive Ties")+
+  theme_minimal()
+
+p2<-ggplot(propBoth, aes(x = pctOR)) +
+  geom_histogram(color = "black", fill = "gray80", bins = 15) +
+  xlab("Proportion of Own-Religion Positive Ties")+
+  theme_minimal()
+
+p3<-ggplot(propBoth, aes(x = pctOGneg)) +
+  geom_histogram(color = "black", fill = "gray80", bins = 15) +
+  xlab("Proportion of Own-Gender Negative Ties")+
+  theme_minimal()
+
+p4<-ggplot(propBoth, aes(x = pctORneg)) +
+  geom_histogram(color = "black", fill = "gray80", bins = 15) +
+  xlab("Proportion of Own-Religion Negative Ties")+
+  theme_minimal()
+
+#(p1 | p2) / (p3 | p4) +
+#  plot_annotation(title = "Histograms of Homophily by Religion and Valence") &
+#  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+```
+
+```{r}
+library(ggplot2)
+library(patchwork)
+library(scales)
+
+p1 <- ggplot(propBoth, aes(x = pctOG)) +
+  geom_histogram(aes(y = ..count../sum(..count..)), 
+                 color = "black", fill = "gray80", bins = 15) +
+  xlab("% of Own-Gender Friendships") +
+  ylab("% of Total Ties") +
+  theme_minimal()+
+  coord_cartesian(ylim=c(0,0.8))+
+  theme(
+    axis.title.y = element_blank())+
+  scale_x_continuous(labels = percent_format(accuracy = 1))
+
+
+p2 <- ggplot(propBoth, aes(x = pctOR)) +
+  geom_histogram(aes(y = ..count../sum(..count..)), 
+                 color = "black", fill = "gray80", bins = 15) +
+  xlab("% of Own-Religion Friendships") +
+  ylab("% of Participants") +
+  theme_minimal()+
+  coord_cartesian(ylim=c(0,0.8))+
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank())+
+  scale_x_continuous(labels = percent_format(accuracy = 1))
+
+
+
+p3 <- ggplot(propBoth, aes(x = pctOGneg)) +
+  geom_histogram(aes(y = ..count../sum(..count..)), 
+                 color = "black", fill = "gray80", bins = 15) +
+  xlab("% of Own-Gender Avoidance") +
+  ylab("% of Participants") +
+  theme_minimal()+
+  coord_cartesian(ylim=c(0,0.8))+
+  theme(
+    axis.title.y = element_blank())+
+  scale_x_continuous(labels = percent_format(accuracy = 1))
+
+
+p4 <- ggplot(propBoth, aes(x = pctORneg)) +
+  geom_histogram(aes(y = ..count../sum(..count..)), 
+                 color = "black", fill = "gray80", bins = 15) +
+  xlab("% of Own-Religion Avoidance") +
+  ylab("% of Participants") +
+  theme_minimal()+
+  coord_cartesian(ylim=c(0,0.8))+
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank())+
+  scale_x_continuous(labels = percent_format(accuracy = 1))
+
+
+
+combined_plot_hist<-(p1 | p2) / (p3 | p4) +
+  plot_annotation(title = "Histograms of Homophily by Religion and Valence") &
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+y_label_plot <- ggplot() +
+  theme_void() +
+  annotation_custom(
+    grob = textGrob("Percentage of Participants", rot = 90, gp = gpar(fontsize = 12))
+  )+  
+  theme(plot.margin = margin(0, 0, 0, 0))  # remove extra whitespace
+
+
+combined_final <- (y_label_plot + combined_plot_hist) + 
+  plot_layout(widths = c(0.07, 1))+  # left label narrow, main plot wide
+  plot_annotation(
+    title = "Distributions of Own-Gender and Own-Religion Friendship and Avoidance",
+    theme = theme(
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.55)))
+    
+print(combined_final)
+
+
+# Counting Things
+# How many complete other religion avoidance is there
+sum(propBoth$pctORneg==0, na.rm=TRUE)
+sum(!is.na(propBoth$pctORneg))
+sum(propBoth$pctORneg==0, na.rm=TRUE)/sum(!is.na(propBoth$pctORneg))
+sum(propBoth$pctORneg==1, na.rm=TRUE)/sum(!is.na(propBoth$pctORneg))
+sum(propBoth$pctORneg==0, na.rm=TRUE)/sum(propBoth$pctORneg!=1,na.rm=TRUE)
+
+(sum(propBoth$pctORneg==1, na.rm=TRUE)+ sum(propBoth$pctORneg==0,na.rm=TRUE))/sum(!is.na(propBoth$pctORneg))
+
+# 26% of participants were exclusively other religion
+# 16% exclusively their own religion avoidance
+# 43% listed only one kind of group
+
+# How many complete other religion friendship is there
+sum(propBoth$pctOR==0, na.rm=TRUE)
+sum(!is.na(propBoth$pctOR))
+sum(propBoth$pctOR==0, na.rm=TRUE)/sum(!is.na(propBoth$pctOR))
+sum(propBoth$pctOR==1, na.rm=TRUE)/sum(!is.na(propBoth$pctOR))
+(sum(propBoth$pctOR==1, na.rm=TRUE)+ sum(propBoth$pctOR==0,na.rm=TRUE))/sum(!is.na(propBoth$pctOR))
+# 5% of participants were exclusively other religion
+# 29% of participants chose only their religion for friendship
+
+# how about gender avoidance
+sum(propBoth$pctOGneg==0, na.rm=TRUE)
+sum(!is.na(propBoth$pctOGneg))
+sum(propBoth$pctOGneg==0, na.rm=TRUE)/sum(!is.na(propBoth$pctOGneg))
+sum(propBoth$pctOGneg==1, na.rm=TRUE)/sum(!is.na(propBoth$pctOGneg))
+
+# 9% of participants were exclusively other gender avoidant
+
+# how about gender friendships
+sum(propBoth$pctOG==0, na.rm=TRUE)
+sum(!is.na(propBoth$pctOG))
+sum(propBoth$pctOG==0, na.rm=TRUE)/sum(!is.na(propBoth$pctOG))
+
+sum(propBoth$pctOGneg==1, na.rm=TRUE)/sum(!is.na(propBoth$pctOGneg))
+sd(propBoth$pctOGneg==1, na.rm=TRUE)
+# less than 1% of participants were exclusively other gender friendships
+# 49% of participants chose to exclusively befriend only their gender
+
+sum(propBoth$pctOGneg!=1, na.rm=TRUE)/sum(!is.na(propBoth$pctOGneg))
+
+```
+
+
+### Part 3: Predicting Peer Nominations
+
+#### Predicting Own-Gender Ties {.tabset}
+
+##### Null Model {.tabset}
+
+```{r, warning=FALSE}
+# null model
+Mnull <- glmer(ownGender ~ 1 + (1|Subject.ID) + (1|class), 
+              data = mainReg, family="binomial")
+summary(Mnull)
+
+```
+
+##### Adding Classroom Factors
+```{r}
+M01lp <- glmer(ownGender ~ (propMale + propHindu + propOther + classsize + internelEdge) + (1|Subject.ID) + (1|class), 
+            data = mainReg, family="binomial")
+summary(M01lp)
+
+# rest is residual variance
+drop1(M01lp,test="Chisq") # best is a marginal effect of internelEdge #internelEdge has the highest F value, but still has a P of 0.123
+anova(Mnull,M01lp)  # suggests vector of controls doesn't add much!
+```
+
+###### Final Base Model
+```{r}
+M12lp <- glmer(ownGender ~ (Gender + gradeCent)+(propMale  + classsize + internelEdge) +
+               (1|Subject.ID) + (1|class), data = mainReg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+
+library(broom.mixed)
+summary(M12lp)
+
+broom.mixed::tidy(M12lp,effects="fixed",conf.int=TRUE, exponentiate=TRUE)
+```
+####### (+GenderM, -Grade, -Class Size, -Internal)
+
+###### Final Religion added
+```{r}
+MbasePlusRelig6 <- glmer(ownGender ~ relig+(Gender +
+                                        gradeCent+
+                                        propMale  +
+                                        classsize +
+                                        internelEdge) + 
+  (1|Subject.ID) + (1|class), data = filter(mainReg,relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+  
+library(broom.mixed)
+summary(MbasePlusRelig6)
+
+broom.mixed::tidy(MbasePlusRelig6,effects="fixed",conf.int=TRUE, exponentiate=TRUE)
+```
+#######(+ReligM(m), +GenderM, -Grade, - Class Size, - Internal)
+
+###### Final GenderAttitudes added
+```{r}
+## Do gender atttiudes predict nominations?
+MgendAtt5 <- glmer(ownGender ~ (Gender + gradeCent + propMale + classsize + internelEdge) + 
+                    ownGendAdv+
+                    ownGendAdv:gradeCent+
+                   (1|Subject.ID) + (1|class), data = mainReg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+
+library(broom.mixed)
+summary(MgendAtt5)
+
+broom.mixed::tidy(MgendAtt5,effects="fixed",conf.int=TRUE, exponentiate=TRUE)
+```
+#######(+GenderM, - ClassSize, - Internal, +Bias, +GradeXBias)
+
+###### Group Identification (ns)
+
+```{r}
+## Do social identifications predict nominations?
+MgendIdent4 <-  glmer(ownGender ~ (Gender + gradeCent + propMale + classsize + internelEdge) + 
+                        Identification_School+
+                        Identification_Gender+
+                   (1|Subject.ID) + (1|class), data = mainReg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+summary(MgendIdent4)
+```
+
+###### Final School Norms added
+
+```{r}
+MgendNorms3 <- glmer(ownGender ~ (Gender + gradeCent + propMale + classsize + internelEdge) + 
+                    SchoolHarmony_BoyGirl + 
+                    SchoolHarmony_People  + gradeCent:SchoolHarmony_People + 
+                    (1|Subject.ID) + (1|class), data = mainReg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+summary(MgendNorms3)
+ 
+library(lme4)
+
+# Model WITHOUT the interaction
+MgendNorms_noInt <- glmer(
+  ownGender ~ Gender + gradeCent + propMale + classsize + internelEdge +
+    SchoolHarmony_BoyGirl + SchoolHarmony_People +
+    (1 | Subject.ID) + (1 | class),
+  data = mainReg,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+# Compare models using a likelihood ratio test
+anova(MgendNorms_noInt, MgendNorms3, test = "Chisq")
+
+# 1976 vs 1976 without interaction, opting for simpler
+
+summary(MgendNorms_noInt)
+```
+
+####### (+GenderM, -Grade, -ClassSize, -Internal, +BoyGirl)
+
+##### Altogether Now
+
+```{r}
+PosGenModel<- glmer(ownGender ~ (Gender + gradeCent + propMale + classsize + internelEdge) + 
+                       #Bias
+                       ownGendAdv+
+                       #Bias Grade Interaction
+                       ownGendAdv:gradeCent+
+                       #SchoolNorms
+                       SchoolHarmony_BoyGirl + 
+                    (1|Subject.ID) + (1|class), data = mainReg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+summary(PosGenModel)
+
+test<- glmer(ownGender ~ (Gender + gradeCent + propMale + classsize + internelEdge) + 
+                       #Bias
+                       ownGendAdv+
+                       #Bias Grade Interaction
+                       ownGendAdv:gradeCent+
+                       #SchoolNorms
+                       SchoolHarmony_BoyGirl + 
+                    (1|Subject.ID), data = mainReg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+summary(test)
+```
+
+#### Predicting Own-Religion Ties {.tabset}
+
+##### Null Model {.tabset}
+
+```{r, warning=FALSE}
+# null model
+Mnull <- glmer(ownRelig ~ 1 + (1|Subject.ID) + (1|class), 
+              data = filter(mainReg, relig %in% c('Hindu', 'Muslim')), family="binomial")
+summary(Mnull)
+```
+
+##### Adding Classroom Factors
+```{r}
+M01lp <- glmer(ownRelig ~ (propMale + propHindu + propOther + classsize + internelEdge) + (1|Subject.ID) + (1|class), 
+            data = filter(mainReg, relig %in% c('Hindu', 'Muslim')), family="binomial")
+summary(M01lp)
+
+# rest is residual variance
+drop1(M01lp,test="Chisq") # best is a marginal effect of internelEdge #internelEdge has the highest F value, but still has a P of 0.123
+anova(Mnull,M01lp)  # suggests vector of controls doesn't add much!
+```
+
+###### Final Base Model
+
+```{r}
+M10lp <- glmer(ownRelig ~ (relig + gradeCent)+(propHindu + propOther + classsize + internelEdge) +
+               relig:classsize + 
+               relig:propHindu + 
+               gradeCent:internelEdge +
+               relig:gradeCent:classsize+
+               (1|Subject.ID) + (1|class), data = filter(mainReg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+
+summary(M10lp)
+```
+#######(-religM, -Grade, +propH(m), -propOther, -MuslimxpropHindu, +gradexinternel, +Muslimxgradexclasssize)
+
+###### Final Gender added
+```{r}
+# look for interactions w/ religions, noting that this restricts analysis to Hindu and Muslim
+MbasePlusGen7 <- glmer(ownRelig ~ Gender*(relig +
+                                          propOther+
+                                          classsize+
+                                          relig:classsize) +
+                         internelEdge+
+                         gradeCent+
+                         propHindu+
+                         relig:propHindu+
+                         gradeCent:internelEdge+
+                         relig:gradeCent:classsize +
+  (1|Subject.ID) + (1|class), data = filter(mainReg,relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+  
+summary(MbasePlusGen7)
+```
+######## (+GenderM, -religM, +classSize,-Grade,-GenderxPropOther,-GenderxClass,-MuslimxPropHindu,+internalxgrade,+GenderMxMuslimXclass,+Muslimxclassxgrade)
+
+###### Final Religious Attitudes added
+
+```{r}
+MReligAtt6 <- glmer(ownRelig ~ (relig + gradeCent)+
+               (propHindu + propOther + internelEdge) +
+               relig:propHindu + 
+               gradeCent:internelEdge +
+               ownReligAdv+
+               (1|Subject.ID) + (1|class), data = filter(mainReg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+MReligAtt6 <- update(MReligAtt6, data = model.frame(MReligAtt6))
+
+summary(MReligAtt6)
+```
+####### (-religM,-grade,+propHindu,-propOther,-internel(m),+bias,+gradeXinternel)
+
+###### Group Identification (ns)
+
+```{r}
+MReligIdent9 <- glmer(ownRelig ~(relig + gradeCent)+
+               (propHindu + propOther + classsize + internelEdge) +
+               relig:propHindu + 
+               gradeCent:internelEdge +
+               (1|Subject.ID) + (1|class), data = filter(mainReg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+MReligIdent9 <- update(MReligIdent9, data = model.frame(MReligIdent9))
+
+```
+
+###### Final School Norms added
+
+```{r}
+MReligNorms12 <- glmer(ownRelig ~(relig)+
+               (propHindu) +
+               relig:propHindu + 
+                 SchoolHarmony_People+
+                 SchoolHarmony_People:relig+
+               (1|Subject.ID) + (1|class), data = filter(mainReg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+MReligNorms12 <- update(MReligNorms12, data = model.frame(MReligNorms12))
+
+summary(MReligNorms12)
+```
+####### (-religM, -religMxPropHindu, +religMxSchoolHarmony_People)
+
+##### Altogether Now
+```{r}
+MReligTot <- glmer(ownRelig ~(relig + gradeCent)+
+               (propHindu + propOther + classsize + internelEdge) +
+               relig:classsize + 
+               relig:propHindu + 
+               gradeCent:internelEdge +
+               relig:gradeCent:classsize+
+                 #
+                 Gender+
+                 SchoolHarmony_People+
+                 Gender:propOther+
+                 Gender:classsize+
+                 Gender:relig:classsize+
+                 ownReligAdv+
+                 relig:SchoolHarmony_People+
+               (1|Subject.ID) + (1|class), data = filter(mainReg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+summary(MReligTot)
+
+library(emmeans)
+emtrends(MReligTot, ~ relig, var = "propHindu")
+emtrends(MReligTot, ~ Gender, var="propOther")
+
+test(emtrends(MReligTot, ~ relig, var = "propHindu"))
+test(emtrends(MReligTot, ~ Gender, var="propOther"))
+
+```
+
+#### Predicting Own-Gender Negative Ties
+
+##### Null Model {.tabset}
+
+```{r, warning=FALSE}
+# null model
+Mnull <- glmer(ownGender ~ 1 + (1|Subject.ID) + (1|class), 
+              data = mainRegNeg, family="binomial")
+summary(Mnull)
+
+```
+
+##### Adding Classroom Factors
+
+###### Final Base Model
+```{r}
+M15lp <- glmer(ownGender ~ (Gender)+(propMale + propHindu + classsize + internelEdge) +
+               (1|Subject.ID) + (1|class), data = mainRegNeg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+
+summary(M15lp)
+```
+####### (+GenderM, +propHindu, -classize,-internelEdge)
+
+###### Final Religion added
+
+```{r}
+MbasePlusReligNeg5<-glmer(ownGender~(Gender + propMale + propHindu + classsize + internelEdge)+
+                            relig+
+                            relig:propHindu+
+               (1|Subject.ID) + (1|class), data = filter(mainRegNeg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+  
+summary(MbasePlusReligNeg5)
+```
+####### (+GenderM, -classSize, -internelEdge, +propHinduXreligM)
+
+######  Gender Attitudes added
+
+```{r}
+MGendAttNeg3 <- glmer(ownGender ~ (Gender)+(propMale + propHindu + classsize + internelEdge) +
+                 ownGendAdv+
+               (1|Subject.ID) + (1|class), data = mainRegNeg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+MGendAttNeg3 <- update(MGendAttNeg3, data = model.frame(MGendAttNeg3))
+
+summary(MGendAttNeg3)
+```
+####### (+GenderM, +propHindu, -classsize(m), -internelEdges, +ownGendAdv)
+
+######  Group Identification added
+
+```{r}
+MGendIdentNeg5 <- glmer(ownGender ~ (Gender)+(propMale + propHindu + classsize + internelEdge) +
+                  Identification_Gender+
+                  Identification_Gender:Gender+
+               (1|Subject.ID) + (1|class), data = mainRegNeg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+
+summary(MGendIdentNeg5)
+```
+####### (+GenderM, +propHindu, -classSize, -InternelEdge, -GenderIdent, +GenderM:GenderIdent)
+
+###### SchoolNorms (ns)
+
+```{r}
+MGendNormsNeg7<- glmer(ownGender ~ (Gender)+(propMale + propHindu + classsize + internelEdge) +
+               (1|Subject.ID) + (1|class), data = mainRegNeg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+MGendNormsNeg7 <- update(MGendNormsNeg7, data = model.frame(MGendNormsNeg7))
+  
+```
+
+##### Altogether now
+```{r}
+MGendNegTot<- glmer(ownGender ~ (Gender)+(propMale + propHindu + classsize + internelEdge) +
+                      relig:propHindu+
+                      ownGendAdv+
+                      Identification_Gender+
+                      Identification_Gender:Gender+
+               (1|Subject.ID) + (1|class), data = mainRegNeg, family="binomial", control=glmerControl(optimizer="bobyqa"))
+
+summary(MGendNegTot)
+```
+####### (+GenderM(m), -classsize, -internelEdge,+bias(m), -GenderIdent, +GenderMXGenderIdent)
+
+#### Predicting Own-Relig Negative Ties
+
+##### Null Model {.tabset}
+
+```{r, warning=FALSE}
+# null model
+Mnull <- glmer(ownRelig ~ 1 + (1|Subject.ID) + (1|class), 
+              data = filter(mainRegNeg, relig %in% c('Hindu', 'Muslim')), family="binomial")
+summary(Mnull)
+```
+
+##### Adding Classroom Factors
+```{r}
+M01lp <- glmer(ownRelig ~ (propMale + propHindu + propOther + classsize + internelEdge) + (1|Subject.ID) + (1|class), 
+            data = filter(mainRegNeg, relig %in% c('Hindu', 'Muslim')), family="binomial")
+summary(M01lp)
+
+```
+
+###### Final Base Model
+
+```{r}
+M11lp <- glmer(ownRelig ~ relig + 
+                gradeCent + 
+                propMale + 
+                propHindu +
+                propOther + 
+                classsize + 
+                internelEdge +
+                relig:propMale + 
+                relig:propHindu +
+                relig:propOther + 
+                relig:classsize +
+                relig:internelEdge +
+                gradeCent:propOther + 
+                (1|Subject.ID) + (1|class), 
+             data = filter(mainRegNeg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+
+summary(M11lp)
+```
+
+####### (-propMale, +propHindu, -classSize, religMxpropMale(m), -religMxpropOther, +religMxclassSize, +religMxinternel, -gradexpropOther)
+
+###### Gender added
+
+```{r}
+MReligGend8<- glmer(
+  ownRelig ~ Gender + relig + gradeCent + propMale + propHindu + propOther + classsize + internelEdge +
+             relig:propMale + relig:propHindu + relig:propOther + relig:classsize + relig:internelEdge + gradeCent:propOther +
+             Gender:relig + Gender:propMale + Gender:propHindu + Gender:propOther + Gender:internelEdge +
+             Gender:relig:propMale + Gender:relig:propHindu + 
+             (1 | Subject.ID) + (1 | class),
+  data = filter(mainRegNeg, relig %in% c("Hindu", "Muslim")),
+  family = "binomial",
+  control = glmerControl(optimizer = "bobyqa")
+)
+
+
+summary(MReligGend8)
+```
+
+####### (-GenderM, -propMale, -propHindu, -classsize(m), +religMxpropMale,-religMxpropOther, +religMxclasssize, +religMxinternelEdge ,-gradexpropOther(m), +GenderMxpropMale, +GenderMxpropOther,-GenderMxinternal, -GenderMxReligMxpropMale, -GenderMxReligMxPropHindu)
+
+###### Religious Attitudes added
+
+```{r}
+MReligAttNeg5 <- glmer(ownRelig ~ relig + 
+                gradeCent + 
+                propMale + 
+                propHindu +
+                propOther + 
+                classsize + 
+                internelEdge +
+                relig:propHindu +
+                relig:propOther + 
+                relig:classsize +
+                relig:internelEdge +
+                ownReligAdv+
+                (1|Subject.ID) + (1|class), 
+             data = filter(mainRegNeg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+MReligAttNeg5 <- update(MReligAttNeg5, data = model.frame(MReligAttNeg5))
+
+summary(MReligAttNeg5)
+```
+####### (-grade(m), -propMale, +propHindu, +propOther(m), -classsize, -internelEdge(m), -bias, -religMxpropHindu, religMxclasssize, +religMxinternel)
+
+###### Group Identification (ns)
+
+```{r}
+MReligNormsIdent8 <- glmer(ownRelig ~ relig + 
+                gradeCent + 
+                propMale + 
+                propHindu +
+                propOther + 
+                classsize + 
+                internelEdge +
+                relig:propHindu +
+                relig:propOther + 
+                relig:classsize +
+                relig:internelEdge +
+                gradeCent:propOther + 
+                (1|Subject.ID) + (1|class), 
+             data = filter(mainRegNeg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+MReligNormsIdent8 <- update(MReligNormsIdent8, data = model.frame(MReligNormsNeg8))
+ 
+```
+
+###### School Norms added
+
+```{r}
+MReligNormsNeg7 <- glmer(ownRelig ~ relig + 
+                gradeCent + 
+                propMale + 
+                propHindu +
+                propOther + 
+                classsize + 
+                internelEdge +
+                relig:propHindu +
+                relig:propOther + 
+                relig:classsize +
+                relig:internelEdge +
+                gradeCent:propOther + 
+                 SchoolHarmony_HinduMuslim+
+                (1|Subject.ID) + (1|class), 
+             data = filter(mainRegNeg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+MReligNormsNeg7 <- update(MReligNormsNeg7, data = model.frame(MReligNormsNeg7))
+
+summary(MReligNormsNeg7)
+```
+####### (-propMale, +propHindu, -classsize, -SchoolHarmony_HinduMuslim(m), -religMxpropHindu, -religMxpropOther, +religMxclasssize, +religMxinternel, -gradexpropOther )
+
+##### Altogether Now
+```{r}
+MReligNegTot <- glmer(ownRelig ~ relig + 
+                gradeCent + 
+                propMale + 
+                propHindu +
+                propOther + 
+                classsize + 
+                internelEdge +
+                relig:propMale + 
+                relig:propHindu +
+                relig:propOther + 
+                relig:classsize +
+                relig:internelEdge +
+                gradeCent:propOther + 
+                  Gender+
+                  Gender:propMale+
+                  Gender:propOther+
+                  Gender:internelEdge+
+                  Gender:propMale:relig+
+                  Gender:relig:propHindu+
+                  ownReligAdv+
+                  SchoolHarmony_HinduMuslim+
+                (1|Subject.ID) + (1|class), 
+             data = filter(mainRegNeg, relig %in% c('Hindu', 'Muslim')), family="binomial", control=glmerControl(optimizer="bobyqa"))
+summary(MReligNegTot)
+```
+
+```{r}
+library(emmeans)
+
+# propMale × religion × gender
+emtrends(
+  MReligNegTot,
+  ~ relig * Gender,
+  var = "propMale")
+
+# propHindu × religion × gender
+emtrends(
+  MReligNegTot,
+  ~ relig * Gender,
+  var = "propHindu")
+
+# classsize × religion
+emtrends(
+  MReligNegTot,
+  ~ relig,
+  var = "classsize")
+
+# propOther × religion × gender
+emtrends(
+  MReligNegTot,
+  ~ relig * Gender,
+  var = "propOther")
+
+# internelEdge × religion
+emtrends(
+  MReligNegTot,
+  ~ relig,
+  var = "internelEdge")
+
+# internelEdge × gender
+emtrends(
+  MReligNegTot,
+  ~ Gender,
+  var = "internelEdge")
+```
+
+
+### SOM: Cross-group Friendships and Crossers
+
+```{r}
+# Load SNA packages
+
+library(tidyverse)
+library(igraph)
+library(sna)
+
+#You're getting warnings, be careful that you make sure to specify package before starting
+
+edges<-mainReg%>%
+  filter(!is.na(Response))%>%
+  select(class,egoID,Response)%>%
+  #mapping EgoID->Subject ID for "from"
+  left_join(mainReg%>%select(class,egoID,Subject.ID),by=c("class","egoID"))%>%
+  rename(from=Subject.ID)%>%
+  #mapping egoID --> Subject.ID for "to"
+  left_join(mainReg%>%select(class,egoID,Subject.ID),by=c("class","Response"="egoID"))%>%
+  rename(to=Subject.ID)%>%
+  distinct(class, from, to, .keep_all = TRUE)
+
+edges <- mainReg %>%
+  filter(!is.na(Response)) %>%
+  select(class,egoID,Response)%>%
+  # Map egoID of nominator to Subject.ID
+  left_join(mainReg %>% select(class, egoID, Subject.ID), by = c("class", "egoID")) %>%
+  rename(from = Subject.ID) %>%
+  # Map Response (class-local) to Subject.ID of nominee
+  left_join(mainReg %>% select(class, egoID, Subject.ID), by = c("class", "Response" = "egoID")) %>%
+  rename(to = Subject.ID)
+
+# Remove edges where mapping failed (i.e., 4 nominated 6 but 6 didn't participate)
+edges <- edges %>% filter(!is.na(from) & !is.na(to))
+
+
+#This is the alters
+
+nodes<-mainReg%>%
+  distinct(Subject.ID, Gender, grade,classroom,class,relig,
+           Attitudes_Boys,Attitudes_Girls,Attitudes_Hindus,Attitudes_Muslims,
+           Identification_Religion,Identification_Gender,
+           Religiosity_Religiosity,
+           SchoolHarmony_BoyGirl,SchoolHarmony_HinduMuslim,SchoolHarmony_People,
+           Wellbeing_EnoughFriends,Wellbeing_Happy,Wellbeing_Lonely,Wellbeing_OthersMean,
+           ownGender,ownRelig,classID,
+           propMale,propHindu,propOther,classsize,internelEdge)%>%
+  distinct(Subject.ID, .keep_all = TRUE)
+
+```
+
+```{r}
+#Pooled Network (means everyone)
+library(igraph)
+library(dplyr)
+
+# Build pooled network across all classes
+g_all <- graph_from_data_frame(
+  d = edges %>% select(from, to),
+  directed = TRUE
+)
+
+# Add node attributes from participants
+node_attrs <- mainReg %>%
+  distinct(Subject.ID, Gender, grade, classroom, relig,class) %>%
+  rename(node = Subject.ID)
+
+V(g_all)$Gender <- node_attrs$Gender[match(V(g_all)$name, node_attrs$node)]
+V(g_all)$grade <- node_attrs$grade[match(V(g_all)$name, node_attrs$node)]
+V(g_all)$classroom <- node_attrs$classroom[match(V(g_all)$name, node_attrs$node)]
+V(g_all)$relig <- node_attrs$relig[match(V(g_all)$name, node_attrs$node)]
+
+vcount(g_all) # total nodes
+ecount(g_all) # total edges
+
+igraph::edge_density(g_all)
+
+reciprocity(g_all)
+
+```
+
+```{r}
+# Build per-class binary networks
+# Split edges by class
+edges_by_class <- edges %>% group_by(class) %>% group_split()
+
+graphs <- lapply(edges_by_class, function(df_class) {
+  g <- graph_from_data_frame(
+    d = df_class %>% select(from, to),
+    directed = TRUE
+  )
+  
+  # Add node attributes for that class
+  nodes_class <- mainReg %>%
+    filter(class == df_class$class[1]) %>%
+    distinct(Subject.ID, Gender, grade, classroom, relig,class) %>%
+    rename(node = Subject.ID)
+  
+  V(g)$Gender <- nodes_class$Gender[match(V(g)$name, nodes_class$node)]
+  V(g)$grade <- nodes_class$grade[match(V(g)$name, nodes_class$node)]
+  V(g)$classroom <- nodes_class$classroom[match(V(g)$name, nodes_class$node)]
+  V(g)$relig <- nodes_class$relig[match(V(g)$name, nodes_class$node)]
+  
+  return(g)
+})
+
+# Name the list by class
+names(graphs) <- sapply(edges_by_class, function(x) unique(x$class))
+
+```
+
+```{r }
+#Creating Node Summaries
+ego_summary<-propTies%>%
+  mutate(propOtherGender=1-pctOG,
+         propOtherRelig=1-pctOR)%>%
+  distinct(Subject.ID, .keep_all=TRUE)
+
+#Drop duplicate info
+ego_summary<-ego_summary[,-c(1:3)]
+
+ego_summary<-nodes%>%
+  left_join(ego_summary,by="Subject.ID")
+
+```
+
+```{r}
+library(dplyr)
+
+# By gender
+ego_summary %>%
+  group_by(Gender) %>%
+  summarise(
+    meanCrossGender = mean(propOtherGender, na.rm = TRUE),
+    meanCrossRelig = mean(propOtherRelig, na.rm = TRUE),
+    n = n()
+  )
+
+# By grade
+ego_summary %>%
+  group_by(grade) %>%
+  summarise(
+    meanCrossGender = mean(propOtherGender, na.rm = TRUE),
+    meanCrossRelig = mean(propOtherRelig, na.rm = TRUE)
+  )
+
+```
+
+```{r}
+library(ggplot2)
+
+# Boxplot of cross-religion nominations by grade
+ggplot(ego_summary, aes(x = factor(grade), y = propOtherRelig)) +
+  geom_boxplot() +
+  labs(x = "Grade", y = "Proportion of cross-religion nominations") +
+  theme_minimal()
+
+# Cross-gender nominations by gender
+ggplot(ego_summary, aes(x = Gender, y = propOtherGender)) +
+  geom_boxplot() +
+  labs(y = "Proportion of cross-gender nominations") +
+  theme_minimal()
+
+```
+## Predicting crossing gender or religious lines {.tabset}
+
+### Linear Regression {.tabset}
+
+```{r}
+ego_summary_filtered <- ego_summary %>%
+  filter(relig %in% c("Hindu", "Muslim"))
+
+# Cross-gender nominations
+lm_crossGender <- lm(propOtherGender ~ Gender + grade + relig, data = ego_summary_filtered)
+summary(lm_crossGender)
+
+
+# Cross-religion nominations predicted by grade and gender
+lm_crossRelig <- lm(propOtherRelig ~ Gender + grade + relig, data = ego_summary_filtered)
+summary(lm_crossRelig)
+
+```
+
+## Summaries of the High Noms. 
+```{r}
+# Figuring out quartiles
+ego_summary_filtered <- ego_summary_filtered %>%
+  mutate(
+    high_crossRelig = propOtherRelig >= quantile(propOtherRelig, 0.75, na.rm = TRUE),
+    high_crossGender = propOtherGender > 0
+  )
+
+#So note, we have a lot more diversity on other relig than other gender, 
+
+# Numeric summaries
+summary_high_relig <- ego_summary_filtered %>%
+  filter(high_crossRelig) %>%
+  summarise(
+    mean_grade = mean(grade, na.rm = TRUE),
+    prop_male = mean(Gender == "M", na.rm = TRUE),
+    mean_religiosity = mean(Religiosity_Religiosity, na.rm = TRUE),
+    mean_SES = mean(SESLadder_SESLadder, na.rm = TRUE)
+  )
+
+summary_high_gender <- ego_summary_filtered %>%
+  filter(high_crossGender) %>%
+  summarise(
+    mean_grade = mean(grade, na.rm = TRUE),
+    prop_male = mean(Gender == "M", na.rm = TRUE),
+    mean_religiosity = mean(Religiosity_Religiosity, na.rm = TRUE),
+    mean_SES = mean(SESLadder_SESLadder, na.rm = TRUE)
+  )
+
+print(summary_high_relig)
+print(summary_high_gender)
+```
+
+### Tests of High vs. Low nominators {.tabset}
+
+```{r}
+
+# T-tests for numeric variables
+t.test(grade ~ high_crossRelig, data = ego_summary_filtered)
+t.test(Religiosity_Religiosity ~ high_crossRelig, data = ego_summary_filtered)
+t.test(grade ~ high_crossGender, data = ego_summary_filtered)
+t.test(Religiosity_Religiosity ~ high_crossGender, data = ego_summary_filtered)
+
+
+# Chi-squared for categorical variables
+chisq.test(table(ego_summary_filtered$Gender, ego_summary_filtered$high_crossRelig))
+chisq.test(table(ego_summary_filtered$relig, ego_summary_filtered$high_crossRelig))
+
+chisq.test(table(ego_summary_filtered$Gender, ego_summary_filtered$high_crossGender))
+chisq.test(table(ego_summary_filtered$relig, ego_summary_filtered$high_crossGender))
+```
+
+
+# Create SNA values
+```{r}
+
+library(dplyr)
+library(igraph)
+
+graphs <- lapply(names(graphs), function(class_name) {
+  g <- graphs[[class_name]]
+  
+  # Degree metrics
+  V(g)$indegree  <- igraph::degree(g, mode = "in")
+  V(g)$outdegree <- igraph::degree(g, mode = "out")
+  V(g)$degree    <- igraph::degree(g, mode = "all")
+  
+  # Betweenness centrality
+  V(g)$betweenness <- igraph::betweenness(g, directed = TRUE)
+  
+  #Closeness
+  V(g)$closeness <-igraph::closeness(g,mode="all",normalized=TRUE)
+  
+  
+  # Filter edges for this class
+  edges_class <- edges %>% dplyr::filter(class == class_name)
+  
+  return(g)
+})
+# Keep names intact
+names(graphs) <- sapply(edges_by_class, function(df_class) unique(df_class$class))
+
+
+class_metrics <- lapply(names(graphs), function(class_name) {
+  g <- graphs[[class_name]]
+  data.frame(
+    class = class_name,
+    density = igraph::edge_density(g),
+    transitivity = igraph::transitivity(g, type = "global")
+  )
+}) %>% bind_rows()
+
+# Merge
+
+library(purrr)
+node_data <- imap_dfr(graphs, function(g, class_name) {
+  as_data_frame(g, what = "vertices") %>%
+    mutate(class = class_name)
+})
+
+node_data <- lapply(names(graphs), function(class_name) {
+  g <- graphs[[class_name]]
+  as_data_frame(g, what = "vertices") %>%
+    mutate(class = class_name)
+}) %>% bind_rows()
+
+# Now do the join
+ego_summary_metrics <- ego_summary_filtered %>%
+  left_join(
+    node_data %>% select(name, indegree, outdegree, degree, betweenness, closeness, class),
+    by = c("Subject.ID" = "name","class"="class")
+  )
+```
+
+### SNA Predictors of Cross-group friendships {.tabset}
+
+#### Individual Factors {.tabset}
+
+#### Centrality (how influential) {.tabset}
+
+Betweeness - Measures how often a node lies on the shortest paths between other nodes
+"brokers", "gatekeepers", "bridges"
+
+Closeness - Average distance from a node to all the others in the network 
+"nodes with high can quickly reach others and spread"
+
+Eigenvector - Measures how connected to well-connected nodes they are
+
+Indegree - How popular someone is
+
+##### Betweenness (brokers)
+
+```{r}
+# ============================================
+# 5. Compare centrality for cross-group kids
+# ============================================
+
+# t-test for betweenness
+t.test(betweenness ~ high_crossGender, data = ego_summary_metrics)
+t.test(betweenness ~ high_crossRelig,  data = ego_summary_metrics)
+
+# So for gender, kids who are high cross group friendship people, tend to be bridge makers, null effect for Religion
+```
+
+##### Closeness
+
+```{r}
+t.test(closeness ~ high_crossGender, data = ego_summary_metrics)
+t.test(closeness ~ high_crossRelig,  data = ego_summary_metrics)
+
+# more closeness for those who cross gender
+# ns for those who cross religion
+```
+
+
+##### Indegree & Outdegree
+
+```{r}
+# t-test for indegree 
+t.test(indegree ~ high_crossGender, data = ego_summary_metrics)
+t.test(indegree ~ high_crossRelig,  data = ego_summary_metrics)
+
+# Okay, so interestingly,gender crossers are more popular than others. 
+# Religion crossers are less popular than their counterparts
+
+### Note for future self to struggle with, would love to see what kind of indegree we're talking about. Are cross-groupers more popular among people from the other group or their own?
+t.test(outdegree ~ high_crossRelig,  data = ego_summary_metrics)
+t.test(outdegree ~ high_crossGender, data = ego_summary_metrics)
+
+
+
+```
+###### By just base ties, not within specific
+
+```{r}
+library(dplyr)
+
+# Merge only Subject.ID, high_cross_Gender, high_cross_Relig from ego_summary_metrics
+ties2_aug <- ties2 %>%
+  left_join(
+    ego_summary_metrics %>% select(Subject.ID, high_crossGender, high_crossRelig),
+    by = "Subject.ID"
+  )
+
+t.test(numAlters ~ high_crossRelig,  data = ties2_aug)
+t.test(numAlters ~ high_crossGender, data = ties2_aug)
+```
+
+##### Number of Nominations {.tabset}
+
+```{r}
+# ============================================
+# 7. Are kids who nominate more more likely to have cross-group friendships
+# ============================================
+# Cross-gender
+cor.test(ego_summary$numNom, ego_summary$propOtherGender, use="complete.obs")
+
+# Cross-religion
+cor.test(ego_summary$numNom, ego_summary$propOtherRelig, use="complete.obs")
+
+# yes, kids who nominate more are more likely to nominate across other religions and gender
+```
+
+Okay, so taken together
+* for Gender: Kids who make friends across gender are more popular/recognized by their peers (indegree), serve as bridges between groups (most likely gender clusters), and are generally well connected (they can reach many peers efficiently (shortest paths)), but are not necessarily clustered together in a network. They bridge clusters but they don't have a highly interconnected "core"
+
+* for Religion: Kids who make friends across religious lines are not as popular. They're not more central in any shape or form, neither are they more influential or more connected. 
+
+
+### Characterizing Cross-Group Friendships {.tabset}
+
+#### Are they more reciprocal? {.tabset}
+
+```{r}
+
+# Assuming ego_summary has Subject.ID, Gender, relig
+edges_aug <- edges %>%
+  # Add 'from' node info
+  left_join(ego_summary %>% select(Subject.ID, Gender, relig),
+            by = c("from" = "Subject.ID")) %>%
+  rename(fromGender = Gender, fromRelig = relig) %>%
+  # Add 'to' node info
+  left_join(ego_summary %>% select(Subject.ID, Gender, relig),
+            by = c("to" = "Subject.ID")) %>%
+  rename(toGender = Gender, toRelig = relig) %>%
+  # Create cross-group indicators
+  mutate(
+    ownGender = ifelse(fromGender == toGender, 1, 0),
+    ownRelig  = ifelse(fromRelig == toRelig, 1, 0)
+  )
+
+
+# Function to calculate reciprocity for cross-group ties
+calculate_reciprocity <- function(edges_df) {
+  
+  # Add a 'reciprocated' column
+  edges_df <- edges_df %>%
+    mutate(reciprocated = mapply(function(f, t) {
+      any(edges_df$from == t & edges_df$to == f)
+    }, from, to))
+  
+  # Summarize reciprocity by ownGender
+  gender_summary <- edges_df %>%
+    group_by(ownGender) %>%
+    summarise(
+      n_edges = n(),
+      prop_reciprocated = mean(reciprocated, na.rm = TRUE)
+    )
+  
+  # Chi-squared test for gender
+  table_gender <- table(edges_df$ownGender, edges_df$reciprocated)
+  gender_chisq <- chisq.test(table_gender)
+  
+  # Summarize reciprocity by ownRelig
+  relig_summary <- edges_df %>%
+    group_by(ownRelig) %>%
+    summarise(
+      n_edges = n(),
+      prop_reciprocated = mean(reciprocated, na.rm = TRUE)
+    )
+  
+  # Chi-squared test for religion
+  table_relig <- table(edges_df$ownRelig, edges_df$reciprocated)
+  relig_chisq <- chisq.test(table_relig)
+  
+  # Return everything in a list
+  return(list(
+    gender_summary = gender_summary,
+    gender_chisq = gender_chisq,
+    relig_summary = relig_summary,
+    relig_chisq = relig_chisq
+  ))
+}
+
+
+recip_results <- calculate_reciprocity(edges_aug)
+
+# View summaries
+recip_results$gender_summary
+recip_results$relig_summary
+
+# View chi-squared tests
+recip_results$gender_chisq
+recip_results$relig_chisq
+
+# So what we're seeing is that yeah, people are more likely to reciprocate same-group friendships than cross-group friendships
+```
+#### Reciprocity Compare Across with CIs
+
+```{r}
+library(dplyr)
+library(purrr)
+
+edges_aug <- edges %>%
+  left_join(ego_summary %>% select(Subject.ID, Gender, relig),
+            by = c("from" = "Subject.ID")) %>%
+  rename(fromGender = Gender, fromRelig = relig) %>%
+  
+  left_join(ego_summary %>% select(Subject.ID, Gender, relig),
+            by = c("to" = "Subject.ID")) %>%
+  rename(toGender = Gender, toRelig = relig) %>%
+  
+  mutate(
+    ownGender = ifelse(fromGender == toGender, 1, 0),
+    ownRelig  = ifelse(fromRelig == toRelig, 1, 0)
+  )
+
+
+calculate_reciprocity <- function(edges_df) {
+  
+  # Add reciprocated flag
+  edges_df <- edges_df %>%
+    mutate(reciprocated = mapply(function(f, t) {
+      any(edges_df$from == t & edges_df$to == f)
+    }, from, to))
+  
+  # Helper for CI
+  binom_ci <- function(x, n) {
+    bt <- binom.test(x, n)
+    tibble(
+      lower = bt$conf.int[1],
+      upper = bt$conf.int[2]
+    )
+  }
+  
+ # Gender
+  
+  gender_summary <- edges_df %>%
+    group_by(ownGender) %>%
+    summarise(
+      n_edges = n(),
+      n_recip = sum(reciprocated),
+      prop_recip = mean(reciprocated),
+      .groups = "drop"
+    ) %>%
+    rowwise() %>%
+    mutate(binom_ci(n_recip, n_edges)) %>%
+    ungroup()
+  
+  gender_chisq <- chisq.test(table(edges_df$ownGender, edges_df$reciprocated))
+  
+#Religion 
+  relig_summary <- edges_df %>%
+    group_by(ownRelig) %>%
+    summarise(
+      n_edges = n(),
+      n_recip = sum(reciprocated),
+      prop_recip = mean(reciprocated),
+      .groups = "drop"
+    ) %>%
+    rowwise() %>%
+    mutate(binom_ci(n_recip, n_edges)) %>%
+    ungroup()
+  
+  relig_chisq <- chisq.test(table(edges_df$ownRelig, edges_df$reciprocated))
+  
+# Gender vs. Religion
+  comparison <- tibble(
+    grouping = c("Gender (own vs cross)", "Religion (own vs cross)"),
+    chi_sq = c(gender_chisq$statistic, relig_chisq$statistic),
+    df = c(gender_chisq$parameter, relig_chisq$parameter),
+    p_value = c(gender_chisq$p.value, relig_chisq$p.value)
+  )
+  
+  return(list(
+    gender_summary = gender_summary,
+    gender_chisq = gender_chisq,
+    relig_summary = relig_summary,
+    relig_chisq = relig_chisq,
+    comparison_table = comparison
+  ))
+}
+
+recip_results <- calculate_reciprocity(edges_aug)
+
+# View results
+recip_results$gender_summary
+recip_results$relig_summary
+recip_results$comparison_table
+
+# Gender and religion same-group reciprocity
+gender_recip <- recip_results$gender_summary %>% filter(ownGender == 1)
+relig_recip <- recip_results$relig_summary %>% filter(ownRelig == 1)
+
+prop.test(
+  x = c(gender_recip$n_recip, relig_recip$n_recip),
+  n = c(gender_recip$n_edges, relig_recip$n_edges)
+)
+
+# Gender and religion cross-group reciprocity
+gender_recip <- recip_results$gender_summary %>% filter(ownGender == 0)
+relig_recip <- recip_results$relig_summary %>% filter(ownRelig == 0)
+
+prop.test(
+  x = c(gender_recip$n_recip, relig_recip$n_recip),
+  n = c(gender_recip$n_edges, relig_recip$n_edges)
+)
+
+```
+
+#### Are they more triadic/clustered? Local Transitivity (individual triadic closure)
+```{r}
+
+library(igraph)
+library(dplyr)
+
+graphs <- lapply(graphs, function(g) {
+  V(g)$local_transitivity <- transitivity(g, type = "local", isolates = "zero")
+  return(g)
+})
+
+
+node_data <- lapply(names(graphs), function(class_name) {
+  g <- graphs[[class_name]]
+  as_data_frame(g, what = "vertices") %>%
+    mutate(class = class_name)
+}) %>% bind_rows()
+
+# Merge
+ego_summary_metric_transitivity <- ego_summary %>%
+  left_join(node_data %>% select(name, class, local_transitivity), 
+            by = c("Subject.ID" = "name", "class" = "class"))
+
+
+# Cross-gender
+lm_crossGender <- lm(local_transitivity ~ propOtherGender, data = ego_summary_metric_transitivity)
+summary(lm_crossGender)
+
+# Children who have higher proportions of other gender friends, have less triadic closure. These groups are lesss "cliquey"
+
+# Cross-religion
+lm_crossRelig <- lm(local_transitivity ~ propOtherRelig, data = ego_summary_metric_transitivity)
+summary(lm_crossRelig)
+
+# Children who have higher proportions of other religion friends also have less triadic closure
+
+```
+
+## SOM5: Wellbeing
+
+```{r, warning=FALSE}
+# convert to long
+wellbeingLong <- subjects %>%
+  dplyr::select(Subject.ID,grade,Gender,relig,ageinyears,Wellbeing_EnoughFriends:Wellbeing_OthersMean) %>%
+  gather(target,rating,Wellbeing_EnoughFriends:Wellbeing_OthersMean) %>%
+  mutate(target = substr(target,11,25),
+         wellbeing = 6-rating)
+
+table(wellbeingLong$target) #sanity check
+```
+```{r, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(grid)  # for unit()
+
+# Define target categories of interest and ensure factor order
+targets_of_interest <- c('EnoughFriends', 'Happy', 'Lonely', 'OthersMean',
+                         'RichPoor')
+target_colors <- brewer.pal(n = length(targets_of_interest), name = "Set2")
+names(target_colors) <- targets_of_interest  # name them so it's clear
+
+wellbeingLong <- wellbeingLong %>%
+  filter(target %in% targets_of_interest) %>%
+  mutate(targetF = factor(target, levels = targets_of_interest))
+
+# Compute means for labeling
+mean_labels <- wellbeingLong %>%
+  group_by(target) %>%
+  dplyr::summarise(mean_wellbeing = mean(wellbeing, na.rm = TRUE)) %>%
+  mutate(label_y = mean_wellbeing + 0.2)  # optional nudge upward
+
+# Create the plot
+combined_plot<-ggplot(wellbeingLong, aes(x = target, y = wellbeing, color = target)) +
+  geom_jitter(width = 0.05, height = 0.15, size = 3, alpha = 0.6) +  # colored dots
+  geom_violin(color = "black", fill = NA, linewidth = 0.5, width = 0.5) +  # transparent violin
+  geom_boxplot(color = "black", fill = NA, width = 0.4, outlier.shape = NA) +  # boxplot
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "darkred") +  # red mean point
+  geom_label(
+    data = mean_labels,
+    aes(x = target, y = mean_wellbeing, label = round(mean_wellbeing, 2)),
+    inherit.aes = FALSE,
+    nudge_x = 0.25,
+    size = 3,
+    fill = "white",
+    color = "black",
+    label.size = 0.25,
+    label.r = unit(0.15, "lines")
+  ) +
+  scale_color_manual(values = target_colors) +
+  scale_y_continuous(breaks = seq(1, 5, 1), limits = c(1, 5.5)) +
+  theme_bw() +
+  xlab("Feeling") +
+  ylab(" Agreement \n (1=Definitely disagree; 5 = Definitely agree)") +
+  ggtitle("Wellbeing") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+
+# Show
+print(combined_plot)
+
+ggsave("combined_plot_wellbeing.png",combined_plot,width=5.5,height=6,dpi=300)
+
+```
+
+
+### Age differences {.tabset}
+
+#### EnoughFriends {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Wellbeing_EnoughFriends,subjects$ageinyears)
+# -0.035, p=0.23
+```
+
+#### Happy {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Wellbeing_Happy,subjects$ageinyears)
+# -0.187, p<0.001
+# older, more happy
+```
+
+#### Lonely {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Wellbeing_Lonely,subjects$ageinyears)
+# 0.24, p<0.001
+#older, less lonely
+```
+
+#### OthersMean {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Wellbeing_OthersMean,subjects$ageinyears)
+# -0.12, p<0.001
+#older, others are more mean
+```
+
+### Gender differences {.tabset}
+
+```{r, warning=FALSE}
+# by gender - not too much going on
+wbPlotGender <- ggplot(filter(wellbeingLong,!is.na(Gender)),aes(x=target,y=wellbeing,group=Gender,fill=Gender))
+wbPlotGender + stat_summary(fun.y=mean, geom="bar", size=2,position = position_dodge()) +
+  stat_summary(fun.data="mean_cl_boot", geom="linerange",position = position_dodge(.9)) +
+  scale_y_continuous(breaks=seq(1,5,1)) +  coord_cartesian(ylim=c(1,5)) +
+  theme_bw() + xlab("Norm Type") + ylab("Endorsement of Positive Norm")
+```
+#### Do they Exist? (No) {.tabset} 
+
+```{r, warning=FALSE}
+#ANOVAs to test: 
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- wellbeingLong %>% 
+  filter(!is.na(Gender)) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(wellbeing ~ Gender, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+tab1 <- process_nested(nested,"nested1")
+
+# Print the combined results table to view all ANOVA summaries 
+print(tab1)
+
+library(dplyr)
+library(gt)
+
+tab1_color<-tab1 %>%
+  mutate(
+    Gender.p.value = signif(Gender.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("Gender.F", "Gender.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "Gender.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    Gender.F = "F Statistic",
+    Gender.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+
+print(tab1_color)
+```
+### Religious differences {.tabset}
+
+```{r, warning=FALSE}
+# by religion - suggests bigger diffs here!
+wbPlotRelig <- ggplot(filter(wellbeingLong,relig %in% c('Hindu','Muslim')),aes(x=target,y=wellbeing,group=relig,fill=relig))
+wbPlotRelig + stat_summary(fun.y=mean, geom="bar", size=2,position = position_dodge()) +
+  stat_summary(fun.data="mean_cl_boot", geom="linerange",position = position_dodge(.9)) +
+  scale_y_continuous(breaks=seq(1,5,1)) +  coord_cartesian(ylim=c(1,5)) +
+  theme_bw() + xlab("Norm Type") + ylab("Endorsement of Positive Norm")
+```
+
+#### Do they Exist? {.tabset}
+
+```{r, warning=FALSE}
+#ANOVAs to test: 
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- wellbeingLong %>% 
+  filter(relig %in% c('Hindu','Muslim')) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(wellbeing ~ relig, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+tab1 <- process_nested(nested,"nested1")
+
+# Print the combined results table to view all ANOVA summaries 
+print(tab1)
+
+library(dplyr)
+library(gt)
+
+tab1_color<-tab1 %>%
+  mutate(
+    relig.p.value = signif(relig.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("relig.F", "relig.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "relig.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    relig.F = "F Statistic",
+    relig.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+print(tab1_color)
+```
+#### Direction? {.tabset}
+
+##### EnoughFriends {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Wellbeing_EnoughFriends~onlyMH$relig) # H < M, p=0.025
+effsize::cohen.d(onlyMH$Wellbeing_EnoughFriends~onlyMH$relig) #d=-0.13
+#Hindus felt that they had enough friends more
+```
+
+##### Happy {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Wellbeing_Happy~onlyMH$relig) # H < M, p=0.033
+effsize::cohen.d(onlyMH$Wellbeing_Happy~onlyMH$relig) #d=-0.13
+#Hindus reported being happy more than Muslims
+```
+
+
+## SOM6: Religious Observance
+
+```{r, warning=FALSE}
+# convert to long
+religLong <- subjects %>%
+  dplyr::select(Subject.ID,grade,Gender,relig,ageinyears,Religiosity_Religiosity,ReligFreq_Celebrate:ReligFreq_ReligiousPlace) %>%
+  gather(target,rating,Religiosity_Religiosity,ReligFreq_Celebrate:ReligFreq_ReligiousPlace) %>%
+  mutate(target = substr(target,11,25),
+         religion = ifelse(target=='y_Religiosity',5-rating,6-rating))
+
+table(religLong$target) #sanity check
+
+religLong %>%
+  group_by(target) %>%
+  dplyr::summarise(avg = mean(religion,na.rm=T),
+            std = sd(religion,na.rm=T))
+```
+### Age differences {.tabset}
+
+#### Celebrate {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$ReligFreq_Celebrate,subjects$ageinyears)
+# -0.016, p=0.589
+```
+#### Pray {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$ReligFreq_Pray,subjects$ageinyears)
+# -0.12, p<0.589
+# More praying with age
+```
+
+#### Read {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$ReligFreq_Read,subjects$ageinyears)
+# .11, p<0.001
+#less reading with age
+```
+#### ReligiousPlaces {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$ReligFreq_ReligiousPlace,subjects$ageinyears)
+# -0.03, p=0.38
+```
+#### Religiosity {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$Religiosity_Religiosity,subjects$ageinyears)
+# 0.33, p<0.001
+#less religious with age
+```
+
+###Gender differences {.tabset}
+
+#### Do they Exist? {.tabset} 
+
+```{r, warning=FALSE}
+#ANOVAs to test: 
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- religLong %>% 
+  filter(!is.na(Gender)) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(religion ~ Gender, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+tab1 <- process_nested(nested,"nested1")
+
+# Print the combined results table to view all ANOVA summaries 
+print(tab1)
+
+library(dplyr)
+library(gt)
+
+tab1_color<-tab1 %>%
+  mutate(
+    Gender.p.value = signif(Gender.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("Gender.F", "Gender.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "Gender.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    Gender.F = "F Statistic",
+    Gender.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+
+print(tab1_color)
+```
+#### Direction? {.tabset}
+
+##### Celebrate {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$ReligFreq_Celebrate~subjects$Gender) # F < M, p=0.03
+effsize::cohen.d(subjects$ReligFreq_Celebrate~subjects$Gender) #d=0.12
+#Girls celebrate less than boys (remember it's because its reversed)
+```
+
+##### ReligiousPlaces {.tabset}
+
+```{r, warning=FALSE}
+t.test(subjects$ReligFreq_ReligiousPlace~subjects$Gender) # F < M, p<0.001
+effsize::cohen.d(subjects$ReligFreq_ReligiousPlace~subjects$Gender) #d=0.27
+#Girls go to religious places less than boys (remember it's because its reversed)
+```
+
+### Religious differences {.tabset}
+
+#### Do they Exist? {.tabset} 
+
+```{r, warning=FALSE}
+#ANOVAs to test: 
+
+# nest by targets (which will be the outcomes of subsequent analyses)
+nested <- religLong %>% 
+  filter(relig %in% c('Hindu','Muslim')) %>%
+  group_by(target) %>%
+  nest()
+
+# run the anova on each data frame (the data in the 3rd column)
+# map takes the data column, runs the analysis on the right, and saves results in the
+# new column created by mutate
+nested <- nested %>%
+  mutate(model = map(data, ~aov(religion ~ relig, data = .)))
+
+# this creates a new column which is a dataframe of all the anova output
+# nicely tidied up so you get the test statistics for each term
+nested <- nested %>%
+  mutate(tidy = map(model, broom::tidy))
+
+#Here are the results
+nested %>%
+  unnest(tidy)
+
+tab1 <- process_nested(nested,"nested1")
+
+# Print the combined results table to view all ANOVA summaries 
+print(tab1)
+
+library(dplyr)
+library(gt)
+
+tab1_color<-tab1 %>%
+  mutate(
+    relig.p.value = signif(relig.p.value, 2)
+  ) %>%
+  gt() %>%
+  fmt_number(
+    columns = c("relig.F", "relig.p.value"),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = "relig.p.value",
+    colors = scales::col_bin(
+      bins = c(-Inf, 0.05, Inf),
+      palette = c("red", "black")
+    )
+  ) %>%
+  cols_label(
+    target = "Target",
+    relig.F = "F Statistic",
+    relig.p.value = "p-value"
+  ) %>%
+  tab_options(
+    table.font.size=px(10)
+  )
+print(tab1_color)
+```
+#### Direction? {.tabset}
+
+##### Read {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$ReligFreq_Read~onlyMH$relig) # H < M, p<0.001
+effsize::cohen.d(onlyMH$ReligFreq_Read~onlyMH$relig) #d=1.11
+#Muslims read religious texts more than Hindus (remember it's because its reversed)
+```
+##### ReligiousPlace {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$ReligFreq_ReligiousPlace~onlyMH$relig) # H < M, p<0.001
+effsize::cohen.d(onlyMH$ReligFreq_ReligiousPlace~onlyMH$relig) #d=0.235
+#Muslims visit religious places more than Hindus (remember it's because its reversed)
+```
+
+##### Religiosity {.tabset}
+
+```{r, warning=FALSE}
+t.test(onlyMH$Religiosity_Religiosity~onlyMH$relig) # H < M, p<0.001
+effsize::cohen.d(onlyMH$Religiosity_Religiosity~onlyMH$relig) #d=0.246
+#Muslims report being more religious than Hindus (remember it's because its reversed)
+```
+
+
+## SOM8: Resouce Allocation
+
+```{r, warning=FALSE}
+# convert to long
+dgLong <- subjects %>%
+  dplyr::select(Subject.ID,grade,Gender,relig,ResourceAlloc_Friend:ResourceAlloc_Mohammed) %>%
+  gather(target,rating,ResourceAlloc_Friend:ResourceAlloc_Mohammed) %>%
+  mutate(target = substr(target,15,25),
+         rating=rating-1)
+
+table(dgLong$target) #sanity check
+table(dgLong$rating)
+```
+
+```{r, warning=FALSE}
+## Filters to keep only Hindus and Muslims, drops unused religions, and then splits by target (e.g., Krishna, Friend, etc.)
+dgLongList <- dgLong %>%
+  filter(relig %in% c('Hindu','Muslim'),!is.na(rating)) %>%
+  mutate(relig = droplevels(relig)) %>%
+  base::split(x= ., f=.$target, drop=TRUE)
+
+library(ggplot2)
+library(dplyr)
+library(patchwork)  # for combining plots
+
+# Make a custom plot function
+make_plot <- function(df, title_text) {
+  ggplot(df, aes(x = relig, y = rating, fill = relig)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.3, color = "black") +
+    stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+    labs(title = title_text, x = "Participant Religion", y = "Rating") +
+    theme_minimal(base_size = 12) +
+    scale_y_continuous(breaks = seq(0, 6, 1), limits = c(0, 6)) +
+    theme(legend.position = "none",
+          plot.title = element_text(hjust = 0.5))
+}
+
+# Filter the relevant data
+dg_filtered <- dgLong %>%
+  filter(relig %in% c("Hindu", "Muslim"), !is.na(rating)) %>%
+  mutate(relig = droplevels(relig))
+
+# Create one plot per target
+plot_friend   <- make_plot(filter(dg_filtered, target == "Friend"), "Target: Friend")
+plot_krishna  <- make_plot(filter(dg_filtered, target == "Krishna"), "Target: Krishna")
+plot_mohammed <- make_plot(filter(dg_filtered, target == "Mohammed"), "Target: Mohammed")
+
+
+combined_plot <- plot_friend + plot_krishna + plot_mohammed +
+  plot_layout(nrow = 1, guides = "collect") +
+  plot_annotation(title = "Hypothetical Resource Allocations by Target",
+                  theme = theme(plot.title = element_text(color = "red", size = 14, hjust = 0.5)))
+
+print(combined_plot)
+```
+
+### Age differences {.tabset}
+
+```{r, warning=FALSE}
+cor.test(subjects$ResourceAlloc_Friend,subjects$ageinyears) # p=0.05 
+cor.test(subjects$ResourceAlloc_Krishna,subjects$ageinyears) # p=0.03 (more with age)
+cor.test(subjects$ResourceAlloc_Mohammed,subjects$ageinyears) #p=0.10
+
+```
+
+### Gender differences {.tabset}
+
+```{r, warning=FALSE}
+t.test(ResourceAlloc_Friend ~ Gender, data=subjects) # p = 0.45
+t.test(ResourceAlloc_Krishna ~ Gender, data=subjects) # p= 0.57
+t.test(ResourceAlloc_Mohammed ~ Gender, data=subjects) # p=0.02 (boys more generous)
+```
+
+### Religious differences {.tabset}
+
+```{r, warning=FALSE}
+t.test(ResourceAlloc_Friend ~ relig, data=filter(subjects,relig %in% c("Hindu",'Muslim'))) # p =  0.91
+
+t.test(ResourceAlloc_Krishna ~ relig, data=filter(subjects,relig %in% c("Hindu",'Muslim'))) # p<0.001 (Hindus more)
+effsize::cohen.d(ResourceAlloc_Krishna ~ relig, data=filter(subjects,relig %in% c("Hindu",'Muslim')))
+
+t.test(ResourceAlloc_Mohammed ~ relig, data=filter(subjects,relig %in% c("Hindu",'Muslim'))) # p<0.001 (Muslims more)
+effsize::cohen.d(ResourceAlloc_Mohammed ~ relig, data=droplevels(filter(subjects,relig %in% c("Hindu",'Muslim')))) # d = -0.48
+
+```
+
